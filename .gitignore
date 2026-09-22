@@ -6,3 +6,4 @@ users.json.tmp
 audit.json
 audit.json.tmp
 server.log
+.env
