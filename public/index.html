@@ -1,0 +1,1343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>U-CHOICE LIQUOR POS</title>
+<style>
+:root{
+  --wine:#7A1F3D;--wine-deep:#3D0E1E;--amber:#D9A441;--amber-deep:#B9852E;
+  --ink:#241B1D;--cream:#F7F1E6;--sand:#F6E9CE;--sand-border:#E6D2AC;
+  --brick:#B23A2E;--teal:#2F6F6B;--border:#E3D6C4;--muted-text:#83726A;
+  /* legacy names kept so every rule below still resolves */
+  --navy:var(--wine-deep);--green:var(--amber);--mint:#FBF3E0;--bg:var(--cream);
+  --text:var(--ink);--red:var(--brick);--blue:var(--teal)
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;color:var(--text);background:linear-gradient(180deg,#FBF6EC,#F2E7D4) fixed}
+button,input,select{font:inherit}
+button{border:0;border-radius:8px;padding:11px 14px;background:var(--wine);color:white;font-weight:700;cursor:pointer}
+button:hover{filter:brightness(1.08)}
+button.danger{background:var(--brick)}
+button.secondary{background:#F1E6D5;color:#4A3527}
+button.blue{background:var(--teal)}
+button:disabled{opacity:.55;cursor:not-allowed}
+.hidden{display:none!important}
+.top{background:linear-gradient(120deg,var(--wine-deep),var(--wine));color:white}
+.brand{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;gap:15px}
+.brand h1{font-size:22px;margin:0}
+.brand small{opacity:.9}
+.brand .att{font-size:13px;text-align:right}
+.nav{display:flex;background:var(--wine-deep);overflow:auto}
+.nav button{border-radius:0;background:transparent;min-width:120px;padding:13px}
+.nav button.active{background:var(--amber);color:var(--ink)}
+.wrap{max-width:1250px;margin:auto;padding:18px}
+.grid{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}
+.card{background:#fff;border-radius:14px;padding:18px;margin-bottom:18px;box-shadow:0 2px 14px rgba(61,14,30,.10)}
+.card h2{margin:0 0 14px}
+.row{display:flex;gap:9px;flex-wrap:wrap}
+.row>*{flex:1;min-width:130px}
+input,select{width:100%;padding:11px;border:1px solid #DFCBA9;border-radius:8px;background:#FFFDFA}
+.mint{background:var(--mint);border:1px solid var(--sand-border);border-radius:10px;padding:12px}
+.total{font-size:24px;font-weight:800;text-align:right;margin:16px 0}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 8px;border-bottom:1px solid #EFE2CB;text-align:left;font-size:14px}
+.badge{display:inline-block;background:var(--sand);color:var(--wine);padding:4px 8px;border-radius:12px;font-size:12px;font-weight:700}
+.muted{color:var(--muted-text);font-size:13px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.metric{background:#fff;border:1px solid var(--border);border-radius:12px;padding:15px}
+.metric b{display:block;font-size:12px;color:#8C7A6B}
+.metric strong{display:block;font-size:23px;margin-top:6px;color:var(--wine-deep)}
+.login{
+  min-height:100vh;display:grid;place-items:center;padding:20px;
+  background:
+    radial-gradient(circle at 85% 12%, rgba(217,164,65,.30), transparent 45%),
+    repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 2px, transparent 2px 26px),
+    linear-gradient(150deg,#2B0A16 0%,#4A1226 35%,#7A1F3D 78%,#5C1730 100%)
+}
+.loginbox{width:min(430px,100%);background:white;border-radius:18px;padding:26px;box-shadow:0 18px 50px rgba(43,10,22,.45)}
+.loginbox h1{text-align:center;color:var(--wine-deep);margin:0 0 5px}
+.loginbox .logo{font-size:40px;text-align:center;margin-bottom:5px}
+.fplink{color:var(--wine);font-weight:600;text-decoration:none;font-size:14px}
+.fplink:hover{text-decoration:underline}
+.tabs{display:flex;margin:18px 0}
+.tabs button{flex:1;border-radius:8px;background:#F1E6D5;color:#4A3527}
+.tabs button.active{background:var(--wine);color:#fff}
+.section{display:none}
+.section.active{display:block}
+.notice{padding:11px;border-radius:8px;background:#FBF0D9;border:1px solid #E8C878;color:#6B4A12;font-size:13px}
+.pillrow{display:flex;gap:8px;flex-wrap:wrap}
+.quick{background:var(--sand);color:var(--wine)}
+.right{text-align:right}
+.modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:18px;z-index:10}
+.modalbox{background:white;border-radius:14px;padding:20px;width:min(520px,100%)}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.cards{grid-template-columns:1fr 1fr}.brand{align-items:flex-start}.brand h1{font-size:18px}th,td{font-size:12px;padding:8px 5px}}
+</style>
+</head>
+<body>
+<div id="loginView" class="login">
+  <div class="loginbox">
+    <div class="logo">🍾</div><h1>U-CHOICE LIQUOR</h1>
+    <p class="muted" style="text-align:center">Sign in to the POS</p>
+    <div id="authMsg" class="notice hidden"></div>
+    <div id="loginForm">
+      <input id="loginUsername" placeholder="Username" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+      <br><br>
+      <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <br><br>
+      <button id="loginBtn" style="width:100%" onclick="doLogin()">▶ Login</button>
+      <p style="text-align:center;margin:12px 0 0"><a href="#" onclick="showForgotPassword();return false;" class="fplink">Forgot password?</a></p>
+    </div>
+    <div id="forgotPasswordForm" class="hidden">
+      <h3 style="text-align:center;margin:0 0 12px">Reset your password</h3>
+      <div id="fpStep1">
+        <p class="muted" style="text-align:center">Enter your username to see your recovery question.</p>
+        <input id="fpUsername" placeholder="Username" autocomplete="username" onkeydown="if(event.key==='Enter')fpLookupQuestion()">
+        <br><br>
+        <button style="width:100%" onclick="fpLookupQuestion()">Continue</button>
+      </div>
+      <div id="fpStep2" class="hidden">
+        <p class="muted"><b>Recovery question:</b> <span id="fpQuestionText"></span></p>
+        <input id="fpAnswer" placeholder="Your answer" onkeydown="if(event.key==='Enter')fpSubmitReset()">
+        <br><br>
+        <input id="fpNewPassword" type="password" placeholder="New password (min 4 chars)" onkeydown="if(event.key==='Enter')fpSubmitReset()">
+        <br><br>
+        <button style="width:100%" onclick="fpSubmitReset()">Reset Password</button>
+      </div>
+      <p style="text-align:center;margin-top:14px"><a href="#" onclick="hideForgotPassword();return false;" class="fplink">← Back to login</a></p>
+    </div>
+    <hr><p class="muted" style="text-align:center">First time setup? Default admin login: <b>admin / admin123</b> — change it right away under Settings.</p>
+  </div>
+</div>
+
+<div id="appView" class="hidden">
+<header class="top"><div class="brand"><div><h1>U-CHOICE LIQUOR</h1><small>Sell Smart &nbsp;|&nbsp; Track Stock &nbsp;|&nbsp; Grow Your Business</small></div><div class="att"><b id="who">—</b><br><span id="roleLabel">—</span> &nbsp; <button class="secondary" style="padding:6px 9px" onclick="logout()">Logout</button></div></div><nav class="nav"><button id="salesNav" class="active" onclick="go('sales')">🛒 Sales</button><button id="stockNav" onclick="go('stock')">📦 Stock</button><button id="reportsNav" onclick="go('reports')">📊 Reports</button>
+  <button id="profitNav" onclick="go('profit')">💹 Profit Periodic Report</button>
+  <button id="expenditureNav" onclick="go('expenditure')">💰 Expenditure</button><button id="historyNav" onclick="go('history')">🧾 History</button><button id="pendingNav" onclick="go('pending')">🕒 Pending</button><button id="usersNav" onclick="go('users')">👤 Users</button><button id="auditNav" onclick="go('audit')">🕵 Audit Report</button><button id="settingsNav" onclick="go('settings')">⚙ Settings</button></nav></header>
+<main class="wrap">
+<section id="sales" class="section active"><div class="grid"><div><div class="card"><h2>New Sale</h2><input id="productSearch" placeholder="Search product by name..." oninput="renderProductsSelect()"><br><br><br><br><select id="productSelect" onchange="updatePreview()"></select><br><br><div class="row"><input id="qty" type="number" min="0.01" step="0.01" value="1" placeholder="Quantity"><button onclick="addToCart()">Add to Cart</button></div><div class="pillrow" style="margin:10px 0"><button class="quick" onclick="setQty(.25)">0.25</button><button class="quick" onclick="setQty(.5)">0.5</button><button class="quick" onclick="setQty(.75)">0.75</button><button class="quick" onclick="setQty(1)">1</button><button class="quick" onclick="setQty(1.5)">1.5</button><button class="quick" onclick="setQty(2)">2</button></div><div id="calcPreview" class="mint"><b>Fractional selling enabled</b><br>Example: Blue Ice 250ml at KES 200 → 0.25 = KES 50.<br>Select a product and enter quantity.</div><table style="margin-top:12px"><thead><tr><th>Item</th><th>Qty</th><th>Total</th><th></th></tr></thead><tbody id="cart"></tbody></table><div class="total">TOTAL: KES <span id="total">0.00</span></div><select id="payment"><option>Cash</option><option>M-Pesa</option><option>Card</option></select>
+<label style="display:flex;align-items:center;gap:8px;margin:10px 0"><input type="checkbox" id="pendingToggle" onchange="togglePendingFields()" style="width:auto"> <span>Sell on credit (payment pending / due later)</span></label>
+<div id="pendingFields" class="hidden">
+<div class="row"><input id="pendingCustomer" placeholder="Customer name"><input id="pendingPhone" placeholder="Customer phone (optional)"></div><br>
+<div class="row"><input id="pendingDeposit" type="number" min="0" step="0.01" placeholder="Amount paid now (0 if none)" value="0"><input id="pendingDue" type="date" placeholder="Due date (optional)"></div><br>
+</div>
+<button style="width:100%" onclick="completeSale()">Complete Sale</button></div></div><div><div class="card"><h2>Today's Activity</h2><div class="cards"><div class="metric"><b>SALES</b><strong id="todaySales">KES 0.00</strong></div><div class="metric"><b>TRANSACTIONS</b><strong id="todayTx">0</strong></div><div class="metric"><b>ITEMS SOLD</b><strong id="todayItems">0</strong></div><div class="metric"><b>STOCK ITEMS</b><strong id="stockCount">0</strong></div></div></div><div class="card"><h2>Recent Sales</h2><div id="recentSales" class="muted">No sales yet.</div></div></div></div></section>
+<section id="stock" class="section"><div class="card"><h2>Stock Management</h2><div id="managerOnlyStock" class="row"><input id="pname" placeholder="Product name"><input id="size" placeholder="Size e.g. 250ml"><input id="buyingPrice" type="number" min="0" step="0.01" placeholder="Buying price"><input id="price" type="number" min="0" step="5" placeholder="Selling price"><input id="stockInput" type="number" min="0" step="0.01" placeholder="Stock in full units"><button onclick="addProduct()">Add Product</button></div><p class="muted">Example: Blue Ice 250ml = KES 200. A sale of 0.25 becomes KES 50. Admins can use <b>Edit</b> beside any product to update its size, buying price, selling price and stock.</p><div class="row"><input id="stockSearch" placeholder="Search product..." oninput="renderStock()" style="flex:2"><button class="blue" onclick="generateStockPDF()">🖨 Generate Stock PDF</button></div><table><thead><tr><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Stock</th><th>Action</th></tr></thead><tbody id="products"></tbody></table>
+<div id="stockPeriodicSection" class="hidden"><hr><h3>📦 Stock Level Report</h3>
+<p class="muted">Current stock levels and stock value for every product, with quantity sold during the selected period. Admin only.</p>
+<div class="row">
+<select id="stockPeriodType" onchange="updateStockPeriodLabel()">
+<option value="daily">Daily</option>
+<option value="weekly">Weekly</option>
+<option value="monthly">Monthly</option>
+<option value="yearly">Yearly</option>
+</select>
+<input id="stockPeriodDate" type="date" onchange="updateStockPeriodLabel()">
+<button onclick="loadStockPeriodicReport()">Analyze Period</button>
+<button class="blue" onclick="generateStockPeriodicPDF()">🖨 Generate PDF</button>
+</div>
+<p id="stockPeriodLabel" class="muted">Select a date and period.</p>
+<div id="stockPeriodicBody" style="margin-top:12px"></div>
+</div>
+</div></section>
+<section id="expenditure" class="section"><div class="card"><h2>💰 Expenditure</h2>
+<p class="muted">Record business expenses by nature, date and amount.</p>
+<div class="row">
+<input id="expNatureMain" placeholder="Nature of expenditure (e.g. Transport)">
+<input id="expDateMain" type="date">
+<input id="expAmountMain" type="number" min="0" step="5" placeholder="Amount (KES)">
+<button onclick="addExpenditureMain()">Add Expenditure</button>
+</div>
+<hr>
+<h3>Expenditure Periodic Analysis</h3>
+<div class="row">
+<select id="expPeriodType" onchange="updateExpPeriodLabel()">
+<option value="daily">Daily</option>
+<option value="weekly">Weekly</option>
+<option value="monthly">Monthly</option>
+<option value="yearly">Yearly</option>
+</select>
+<input id="expPeriodDate" type="date" onchange="updateExpPeriodLabel()">
+<button onclick="loadExpenditurePeriodicReport()">Analyze Expenditure</button>
+</div>
+<p id="expPeriodLabel" class="muted">Select a date and analysis period.</p>
+<div id="expenditurePeriodicBody" style="margin-top:14px"></div>
+<hr>
+<h3>All Expenditures</h3>
+<div style="overflow:auto"><table>
+<thead><tr><th>Nature of Expenditure</th><th>Date</th><th>Amount</th><th>Action</th></tr></thead>
+<tbody id="expenditureRowsMain"></tbody>
+<tfoot><tr><th colspan="2" class="right">TOTAL EXPENDITURE</th><th id="expenditureTotalMain">KES 0.00</th><th></th></tr></tfoot>
+</table><div style="margin-top:10px"><button class="danger" onclick="clearAllExpenditures()">Clear All Expenditures</button> <button class="blue" onclick="generateExpenditurePDF()">🖨 Generate Expenditure PDF</button></div></div></div></section>
+<section id="reports" class="section"><div class="card"><h2>Manager Dashboard</h2><p id="reportsScopeNote" class="muted hidden"></p><div class="cards"><div class="metric"><b>TODAY</b><strong id="rToday">KES 0.00</strong></div><div class="metric"><b>THIS MONTH</b><strong id="rMonth">KES 0.00</strong></div><div class="metric"><b>TRANSACTIONS</b><strong id="rTx">0</strong></div><div class="metric"><b>LOW STOCK</b><strong id="rLow">0</strong></div></div><br><div class="row">
+<input id="reportDate" type="date">
+<button onclick="loadReport()">View Day</button>
+<button class="secondary" onclick="clearReport()">Clear</button>
+<button class="blue" onclick="generateReportsPDF()">🖨 Generate Report PDF</button>
+</div>
+<hr>
+<h3>Periodic Analysis</h3>
+<div class="row">
+<select id="periodType" onchange="updatePeriodLabel()">
+<option value="daily">Daily</option>
+<option value="weekly">Weekly</option>
+<option value="monthly">Monthly</option>
+<option value="yearly">Yearly</option>
+</select>
+<input id="periodDate" type="date" onchange="updatePeriodLabel()">
+<button onclick="loadPeriodicReport()">Analyze Period</button>
+</div>
+<p id="periodLabel" class="muted">Select a date and analysis period.</p>
+<div id="reportBody" style="margin-top:14px"></div></div></section>
+<section id="profit" class="section"><div class="card"><h2>💹 Profit Periodic Report</h2><p class="muted">Analyze profit from sales after deducting the buying cost of products.</p><div class="row"><select id="profitPeriodType" onchange="updateProfitPeriodLabel()"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select><input id="profitPeriodDate" type="date" onchange="updateProfitPeriodLabel()"><button onclick="loadProfitPeriodicReport()">Analyze Profit</button></div><p id="profitPeriodLabel" class="muted">Select a date and profit analysis period.</p><div id="profitPeriodicBody" style="margin-top:14px"></div></div></section>
+<section id="history" class="section"><div class="card"><h2>Sales History</h2><div class="row"><input id="historySearch" placeholder="Search product, date, payment, attendant" oninput="renderHistory()"><input id="historyDate" type="date" onchange="renderHistory()"><select id="historyAtt" onchange="renderHistory()"><option value="">All attendants</option></select><button class="secondary" onclick="clearHistoryFilters()">Clear Filters</button><button class="danger" onclick="clearAllHistory()">Clear All History</button></div><p id="historySummary" class="muted"></p><div style="overflow:auto"><table><thead><tr><th>Date</th><th>Time</th><th>Attendant</th><th>Items</th><th>Total</th><th>Payment</th><th>Action</th></tr></thead><tbody id="salesHistory"></tbody></table></div></div></section>
+<section id="pending" class="section"><div class="card"><h2>🕒 Pending Payments (Credit Sales)</h2>
+<p class="muted">Sales sold on credit — payment due later. Record a payment as the customer pays it off; the balance updates automatically and the sale is marked settled once fully paid.</p>
+<p id="pendingScopeNote" class="muted hidden"></p>
+<div class="cards">
+<div class="metric"><b>OUTSTANDING BALANCE</b><strong id="pendOutstanding">KES 0.00</strong></div>
+<div class="metric"><b>OPEN CREDIT SALES</b><strong id="pendOpenCount">0</strong></div>
+<div class="metric"><b>COLLECTED IN PERIOD</b><strong id="pendCollected">KES 0.00</strong></div>
+<div class="metric"><b>OVERDUE</b><strong id="pendOverdue">0</strong></div>
+</div><br>
+<div class="row">
+<select id="pendPeriodType" onchange="updatePendPeriodLabel()">
+<option value="all">All time</option>
+<option value="daily">Daily</option>
+<option value="weekly">Weekly</option>
+<option value="monthly">Monthly</option>
+<option value="yearly">Yearly</option>
+</select>
+<input id="pendPeriodDate" type="date" onchange="updatePendPeriodLabel()">
+<select id="pendStatusFilter" onchange="renderPending()">
+<option value="outstanding">Outstanding only</option>
+<option value="all">All (incl. settled)</option>
+<option value="settled">Settled only</option>
+</select>
+<input id="pendSearch" placeholder="Search customer, phone, attendant..." oninput="renderPending()">
+</div>
+<p id="pendPeriodLabel" class="muted">Showing all-time pending sales.</p>
+<div class="row"><button onclick="renderPending()">Apply</button><button class="secondary" onclick="clearPendingFilters()">Clear Filters</button><button class="blue" onclick="generatePendingPDF()">🖨 Generate Pending Report PDF</button></div>
+<div style="overflow:auto;margin-top:12px"><table><thead><tr><th>Date</th><th>Customer</th><th>Attendant</th><th>Items</th><th>Total</th><th>Paid</th><th>Balance</th><th>Due</th><th>Status</th><th>Action</th></tr></thead><tbody id="pendingRows"></tbody></table></div>
+</div></section>
+<section id="audit" class="section"><div class="card"><h2>🕵 Audit Report</h2>
+<p class="muted">A record of who did what and when: logins, user account changes, sales, stock, expenditure and settings activity across the whole system. Login/logout and user-management entries are recorded by the server itself and can't be altered from here.</p>
+<div class="row">
+<input id="auditSearch" placeholder="Search user, action, details..." oninput="renderAuditLog()">
+<select id="auditCategoryFilter" onchange="renderAuditLog()"><option value="">All categories</option></select>
+</div><br>
+<div class="row">
+<select id="auditPeriodType" onchange="updateAuditPeriodLabel()">
+<option value="all">All time</option>
+<option value="daily">Daily</option>
+<option value="weekly">Weekly</option>
+<option value="monthly">Monthly</option>
+<option value="yearly">Yearly</option>
+</select>
+<input id="auditDate" type="date" onchange="updateAuditPeriodLabel()">
+<button class="secondary" onclick="clearAuditFilters()">Clear Filters</button>
+<button onclick="loadAuditLog()">Refresh</button>
+</div>
+<p id="auditPeriodLabel" class="muted">Showing all-time audit entries.</p>
+<p id="auditSummary" class="muted"></p>
+<div style="overflow:auto"><table><thead><tr><th>Date</th><th>Time</th><th>User</th><th>Role</th><th>Category</th><th>Action</th><th>Details</th></tr></thead><tbody id="auditRows"></tbody></table></div>
+<button class="danger" onclick="clearAuditLog()">Clear Audit Log</button>
+</div></section>
+<section id="users" class="section"><div class="card"><h2>👤 Manage Users</h2>
+<p class="muted">Admins have full access to everything. Create attendant accounts below and choose exactly which sections each one can use.</p>
+<div class="row">
+<input id="newUsername" placeholder="Username">
+<input id="newPassword" type="password" placeholder="Password (min 4 chars)">
+<select id="newRole" onchange="$(\'newUserPerms\').style.display=this.value===\'admin\'?\'none\':\'flex\'">
+<option value="attendant">Attendant</option>
+<option value="admin">Admin (full access)</option>
+</select>
+<button onclick="addUser()">Add User</button>
+</div>
+<p class="muted" style="margin-top:8px">Attendant access (uncheck what they should NOT see):</p>
+<div class="pillrow" id="newUserPerms" style="margin:6px 0 14px">
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="sales" checked> Sales</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="stock" checked> Stock</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="reports"> Reports</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="profit"> Profit</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="expenditure"> Expenditure</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="history" checked> History</label>
+<label style="min-width:auto"><input type="checkbox" class="newPerm" data-key="settings"> Settings</label>
+</div>
+<hr>
+<h3>Existing Users</h3>
+<div style="overflow:auto"><table><thead><tr><th>Username</th><th>Role</th><th>Access</th><th>Action</th></tr></thead><tbody id="usersRows"></tbody></table></div>
+</div></section>
+<section id="settings" class="section"><div class="card"><h2>Settings</h2><div id="managerSettings"><h3>Business</h3><div class="row"><input id="businessName" value="U-CHOICE LIQUOR"></div><br><button onclick="saveBusinessSettings()">Save Business Settings</button><hr><h3>My Account</h3><p class="muted">Signed in as <b id="settingsWhoAmI">—</b>.</p><div class="row"><input id="curPassword" type="password" placeholder="Current password"><input id="newPasswordSelf" type="password" placeholder="New password (min 4 chars)"><button onclick="changeMyPassword()">Change Password</button></div>
+<hr><h3>Recovery Question</h3>
+<p class="muted" id="securityQuestionStatus">Set a recovery question so you can reset your own password from the login screen if you forget it.</p>
+<div class="row">
+<select id="securityQuestionSelect" onchange="onSecurityQuestionChange()">
+<option value="What is the name of your first pet?">What is the name of your first pet?</option>
+<option value="What city were you born in?">What city were you born in?</option>
+<option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
+<option value="What was your first employer?">What was your first employer?</option>
+<option value="What is your favourite meal?">What is your favourite meal?</option>
+<option value="custom">Write my own question...</option>
+</select>
+</div><br>
+<div id="securityQuestionCustomWrap" class="row hidden"><input id="securityQuestionCustom" placeholder="Type your own recovery question"></div>
+<div class="row">
+<input id="securityAnswer" placeholder="Your answer">
+<input id="securityQuestionPassword" type="password" placeholder="Current password (to confirm)">
+<button onclick="saveSecurityQuestion()">Save Recovery Question</button>
+</div>
+<hr><h3>Storage</h3><p class="muted">This version uses a Node.js/Express backend for storage instead of the browser\'s local storage. Data is saved on the server (<code>data.json</code> for business records, <code>users.json</code> for accounts) and is available to any device that opens this app pointed at the same server.</p></div></div></section>
+</main></div>
+<div id="modal" class="modal hidden"><div class="modalbox"><h3 id="modalTitle">Confirm</h3><p id="modalText"></p><div class="row"><button class="secondary" onclick="closeModal()">Cancel</button><button class="danger" id="modalOk">Confirm</button></div></div></div>
+<div id="editStockModal" class="modal hidden"><div class="modalbox">
+  <h3>Edit Product — <span id="editStockProductName">—</span></h3>
+  <p class="muted">Update size, buying price, selling price and stock quantity. Admin only.</p>
+  <div class="row">
+    <input id="editStockSize" placeholder="Size e.g. 250ml">
+  </div><br>
+  <div class="row">
+    <input id="editStockBuying" type="number" min="0" step="0.01" placeholder="Buying price">
+    <input id="editStockSelling" type="number" min="0" step="5" placeholder="Selling price">
+  </div><br>
+  <div class="row">
+    <input id="editStockQty" type="number" min="0" step="0.01" placeholder="Stock quantity">
+  </div>
+  <div class="row" style="margin-top:14px"><button class="secondary" onclick="closeEditStockModal()">Cancel</button><button onclick="saveEditStock()">Save Changes</button></div>
+</div></div>
+<div id="recordPaymentModal" class="modal hidden"><div class="modalbox">
+  <h3>Record Payment — <span id="rpCustomerName">—</span></h3>
+  <p class="muted" id="rpSaleSummary"></p>
+  <div class="row"><input id="rpAmount" type="number" min="0.01" step="0.01" placeholder="Amount received"></div>
+  <div class="row" style="margin-top:14px"><button class="secondary" onclick="closeRecordPaymentModal()">Cancel</button><button onclick="submitRecordPayment()">Record Payment</button></div>
+</div></div>
+
+<script>
+/* ------------------------------------------------------------------
+   Storage + auth layer: talks to the Express backend instead of
+   localStorage. Business data is split into per-resource endpoints
+   (/api/products, /api/sales, /api/stock-activities, /api/expenditures,
+   /api/settings), each checked server-side against the logged-in
+   user's permissions — not just hidden in the UI. A valid session
+   token (returned at login) is required for every call.
+------------------------------------------------------------------- */
+const API_BASE = '';
+let settings = { businessName: 'U-CHOICE LIQUOR' };
+let products = [], sales = [], cart = [], expenditures = [];
+let authToken = localStorage.getItem('uchoice_pos_token') || null;
+let currentUser = null; // { id, username, role, permissions }
+
+async function apiFetch(url, opts={}){
+  opts.headers = Object.assign({}, opts.headers||{}, authToken?{Authorization:'Bearer '+authToken}:{});
+  const res = await fetch(url, opts);
+  if(res.status===401){ forceLogout('Your session expired. Please log in again.'); throw new Error('Not authenticated'); }
+  let body=null;
+  try{ body = await res.json(); }catch(e){}
+  if(!res.ok) throw new Error((body&&body.error)||('Request failed ('+res.status+')'));
+  return body;
+}
+
+const currentProfile={name:'',role:'attendant'};
+const $=id=>document.getElementById(id);
+const money=n=>(Math.round(Number(n||0)/5)*5).toFixed(2);
+const qtyFmt=n=>Number(n||0).toFixed(2).replace(/\.00$/,'');
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function today(){return new Date().toISOString().slice(0,10)}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+
+function showAuthMsg(msg){$('authMsg').textContent=msg;$('authMsg').classList.remove('hidden')}
+function hideAuthMsg(){$('authMsg').classList.add('hidden')}
+
+function showForgotPassword(){
+  $('loginForm').classList.add('hidden');
+  $('forgotPasswordForm').classList.remove('hidden');
+  $('fpStep1').classList.remove('hidden');
+  $('fpStep2').classList.add('hidden');
+  $('fpUsername').value='';$('fpAnswer').value='';$('fpNewPassword').value='';
+  hideAuthMsg();
+}
+function hideForgotPassword(){
+  $('forgotPasswordForm').classList.add('hidden');
+  $('loginForm').classList.remove('hidden');
+  hideAuthMsg();
+}
+let fpUsernameCache=null;
+async function fpLookupQuestion(){
+  const username=$('fpUsername').value.trim();
+  if(!username) return showAuthMsg('Enter your username.');
+  try{
+    const res=await fetch('/api/forgot-password/question',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});
+    const body=await res.json();
+    if(!res.ok) throw new Error(body.error||'Could not look that up.');
+    if(!body.question){
+      showAuthMsg('No recovery question is set for this account. Ask an admin to reset your password for you.');
+      return;
+    }
+    fpUsernameCache=username;
+    $('fpQuestionText').textContent=body.question;
+    $('fpStep1').classList.add('hidden');
+    $('fpStep2').classList.remove('hidden');
+    hideAuthMsg();
+  }catch(err){ showAuthMsg(err.message||'Could not reach the server.'); }
+}
+async function fpSubmitReset(){
+  const answer=$('fpAnswer').value;
+  const newPassword=$('fpNewPassword').value;
+  if(!answer.trim()) return showAuthMsg('Enter your answer.');
+  if(!newPassword||newPassword.length<4) return showAuthMsg('Choose a new password (min 4 characters).');
+  try{
+    const res=await fetch('/api/forgot-password/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:fpUsernameCache,answer,newPassword})});
+    const body=await res.json();
+    if(!res.ok) throw new Error(body.error||'Could not reset password.');
+    hideForgotPassword();
+    $('loginUsername').value=fpUsernameCache;
+    $('loginPassword').value='';
+    showAuthMsg('Password reset. Log in with your new password.');
+  }catch(err){ showAuthMsg(err.message||'Could not reach the server.'); }
+}
+
+async function doLogin(){
+  const username=$('loginUsername').value.trim();
+  const password=$('loginPassword').value;
+  if(!username||!password) return showAuthMsg('Enter your username and password.');
+  $('loginBtn').disabled=true;$('loginBtn').textContent='Signing in…';
+  try{
+    const res = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+    const body = await res.json();
+    if(!res.ok) throw new Error(body.error||'Login failed.');
+    authToken=body.token;currentUser=body.user;
+    localStorage.setItem('uchoice_pos_token',authToken);
+    hideAuthMsg();
+    await afterLogin();
+  }catch(err){
+    showAuthMsg(err.message||'Could not reach the server.');
+  }finally{
+    $('loginBtn').disabled=false;$('loginBtn').textContent='▶ Login';
+  }
+}
+
+async function tryAutoLogin(){
+  if(!authToken) return;
+  try{
+    const body = await apiFetch('/api/me');
+    currentUser = body.user;
+    await afterLogin();
+  }catch(err){
+    authToken=null;currentUser=null;
+    localStorage.removeItem('uchoice_pos_token');
+  }
+}
+
+async function afterLogin(){
+  $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');
+  $('who').textContent=currentUser.username;
+  $('roleLabel').textContent=currentUser.role.toUpperCase();
+  currentProfile.name=currentUser.username;currentProfile.role=currentUser.role;
+  await loadPermittedData();
+  applyPermissions();
+  renderAll();
+  if(currentUser.role==='admin'){ renderUsers(); loadAuditLog(); }
+}
+
+async function logout(){
+  try{ await apiFetch('/api/logout',{method:'POST'}); }catch(e){}
+  cart=[];authToken=null;currentUser=null;
+  localStorage.removeItem('uchoice_pos_token');
+  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+  $('loginUsername').value='';$('loginPassword').value='';
+  hideAuthMsg();
+}
+
+function forceLogout(msg){
+  authToken=null;currentUser=null;
+  localStorage.removeItem('uchoice_pos_token');
+  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+  if(msg) showAuthMsg(msg);
+}
+
+// The single source of truth for what this user can see. Used both to
+// show/hide nav tabs and to decide which resources to even fetch —
+// but the real enforcement happens server-side; this just avoids
+// wasted/failed requests and drives the UI.
+function getEffectivePermissions(){
+  if(!currentUser) return {sales:false,stock:false,reports:false,profit:false,expenditure:false,history:false,settings:false};
+  if(currentUser.role==='admin') return {sales:true,stock:true,reports:true,profit:true,expenditure:true,history:true,settings:true};
+  return Object.assign({sales:false,stock:false,reports:false,profit:false,expenditure:false,history:false,settings:false}, currentUser.permissions||{});
+}
+
+function applyPermissions(){
+  const isAdmin = currentUser.role==='admin';
+  const perms = getEffectivePermissions();
+  const map = {sales:'salesNav',stock:'stockNav',reports:'reportsNav',profit:'profitNav',expenditure:'expenditureNav',history:'historyNav',settings:'settingsNav'};
+  let firstAllowed=null;
+  Object.entries(map).forEach(([key,navId])=>{
+    const btn=$(navId);
+    if(!btn)return;
+    if(perms[key]){ btn.style.display=''; if(!firstAllowed) firstAllowed=key; }
+    else btn.style.display='none';
+  });
+  $('usersNav').style.display = isAdmin ? '' : 'none';
+  $('auditNav').style.display = isAdmin ? '' : 'none';
+  $('pendingNav').style.display = (isAdmin || perms.sales) ? '' : 'none';
+  const stockPeriodicSection = $('stockPeriodicSection');
+  if(stockPeriodicSection) stockPeriodicSection.classList.toggle('hidden', !isAdmin);
+  const reportsScopeNote = $('reportsScopeNote');
+  if(reportsScopeNote){
+    if(!isAdmin){ reportsScopeNote.textContent = `Showing sales recorded by you (${currentUser.username}) only. Admins see the full business report.`; reportsScopeNote.classList.remove('hidden'); }
+    else reportsScopeNote.classList.add('hidden');
+  }
+  const pendingScopeNote = $('pendingScopeNote');
+  if(pendingScopeNote){
+    if(!isAdmin){ pendingScopeNote.textContent = `Showing credit sales recorded by you (${currentUser.username}) only. Admins see every attendant's pending sales.`; pendingScopeNote.classList.remove('hidden'); }
+    else pendingScopeNote.classList.add('hidden');
+  }
+  currentUser.__perms = perms;
+  $('settingsWhoAmI').textContent = currentUser.username + ' (' + currentUser.role + ')';
+  renderSecurityQuestionStatus();
+  const activeEl = document.querySelector('.section.active');
+  const activeId = activeEl ? activeEl.id : 'sales';
+  const adminOnlySections = ['users','audit'];
+  const effectivePerm = (id) => id==='pending' ? (perms.sales||false) : perms[id];
+  if(isAdmin || (!adminOnlySections.includes(activeId) && effectivePerm(activeId))){
+    go(adminOnlySections.includes(activeId)&&!isAdmin ? (firstAllowed||'sales') : activeId);
+  } else if(firstAllowed){
+    go(firstAllowed);
+  } else {
+    go('sales');
+    showAuthMsg('Your account has no assigned permissions yet. Ask an admin to grant access.');
+  }
+}
+
+// Fetches only the resources this user is actually permitted to see.
+// Product seeding now happens once, server-side, on first run.
+async function loadPermittedData(){
+  const perms = getEffectivePermissions();
+  const tasks = [];
+  if(perms.sales||perms.stock||perms.reports||perms.profit) tasks.push(loadProducts());
+  if(perms.sales||perms.reports||perms.profit||perms.history) tasks.push(loadSales());
+  if(perms.expenditure) tasks.push(loadExpenditures());
+  if(perms.settings) tasks.push(loadSettingsFromServer());
+  await Promise.allSettled(tasks);
+}
+async function loadProducts(){
+  try{
+    const body=await apiFetch('/api/products');
+    products=body.products||[];
+    products.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),undefined,{sensitivity:'base'}));
+  }catch(err){ console.error('Could not load products:',err); }
+}
+async function loadSales(){
+  try{ const body=await apiFetch('/api/sales'); sales=(body.sales||[]).map(normalizeSale); }
+  catch(err){ console.error('Could not load sales:',err); }
+}
+async function loadExpenditures(){
+  try{ const body=await apiFetch('/api/expenditures'); expenditures=body.expenditures||[]; }
+  catch(err){ console.error('Could not load expenditures:',err); }
+}
+async function loadSettingsFromServer(){
+  try{ const body=await apiFetch('/api/settings'); settings=body.settings||{businessName:'U-CHOICE LIQUOR'}; }
+  catch(err){ console.error('Could not load settings:',err); }
+}
+
+/* ---------------- User management (admin) ---------------- */
+async function renderUsers(){
+  if(!currentUser||currentUser.role!=='admin')return;
+  try{
+    const {users:list} = await apiFetch('/api/users');
+    $('usersRows').innerHTML = list.length ? list.map(u=>`
+      <tr data-id="${u.id}">
+        <td>${esc(u.username)}${u.id===currentUser.id?' <span class="badge">you</span>':''}</td>
+        <td><select class="userRole" ${u.id===currentUser.id?'disabled':''}>
+          <option value="attendant" ${u.role==='attendant'?'selected':''}>Attendant</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+        </select></td>
+        <td><div class="pillrow">${['sales','stock','reports','profit','expenditure','history','settings'].map(k=>`<label style="min-width:auto"><input type="checkbox" class="userPerm" data-key="${k}" ${u.permissions[k]?'checked':''} ${u.role==='admin'?'disabled':''}> ${k}</label>`).join('')}</div></td>
+        <td><button onclick="saveUserRow('${u.id}')">Save</button> <button class="secondary" onclick="resetUserPassword('${u.id}')">Reset PW</button> ${u.id===currentUser.id?'':`<button class="danger" onclick="deleteUser('${u.id}')">Delete</button>`}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="muted">No users yet.</td></tr>';
+  }catch(err){
+    $('usersRows').innerHTML = `<tr><td colspan="4" class="muted">Could not load users: ${esc(err.message)}</td></tr>`;
+  }
+}
+async function addUser(){
+  const username=$('newUsername').value.trim();
+  const password=$('newPassword').value;
+  const role=$('newRole').value;
+  const permissions={};
+  document.querySelectorAll('#newUserPerms .newPerm').forEach(cb=>permissions[cb.dataset.key]=cb.checked);
+  if(!username||!password) return alert('Enter a username and password.');
+  if(password.length<4) return alert('Password must be at least 4 characters.');
+  try{
+    await apiFetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,role,permissions})});
+    $('newUsername').value='';$('newPassword').value='';$('newRole').value='attendant';
+    document.querySelectorAll('#newUserPerms .newPerm').forEach(cb=>cb.checked=(cb.dataset.key==='sales'||cb.dataset.key==='stock'||cb.dataset.key==='history'));
+    renderUsers();
+  }catch(err){ alert(err.message); }
+}
+async function saveUserRow(id){
+  const row=document.querySelector(`#usersRows tr[data-id="${id}"]`);
+  if(!row)return;
+  const role=row.querySelector('.userRole').value;
+  const permissions={};
+  row.querySelectorAll('.userPerm').forEach(cb=>permissions[cb.dataset.key]=cb.checked);
+  try{
+    await apiFetch(`/api/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({role,permissions})});
+    renderUsers();
+    alert('User updated.');
+  }catch(err){ alert(err.message); }
+}
+async function resetUserPassword(id){
+  const pw=prompt('Enter a new password for this user (min 4 characters):');
+  if(pw===null)return;
+  if(pw.length<4) return alert('Password must be at least 4 characters.');
+  try{
+    await apiFetch(`/api/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    alert('Password reset.');
+  }catch(err){ alert(err.message); }
+}
+async function deleteUser(id){
+  if(!confirm('Delete this user account? This cannot be undone.'))return;
+  try{
+    await apiFetch(`/api/users/${id}`,{method:'DELETE'});
+    renderUsers();
+  }catch(err){ alert(err.message); }
+}
+async function changeMyPassword(){
+  const cur=$('curPassword').value,np=$('newPasswordSelf').value;
+  if(!cur||!np) return alert('Enter your current and new password.');
+  if(np.length<4) return alert('New password must be at least 4 characters.');
+  try{
+    await apiFetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:cur,newPassword:np})});
+    $('curPassword').value='';$('newPasswordSelf').value='';
+    alert('Password changed.');
+  }catch(err){ alert(err.message); }
+}
+function renderSecurityQuestionStatus(){
+  const el=$('securityQuestionStatus'); if(!el||!currentUser)return;
+  if(currentUser.securityQuestion){
+    el.innerHTML=`Recovery question is set: <b>${esc(currentUser.securityQuestion)}</b>. Saving again below replaces it.`;
+    const opt=[...$('securityQuestionSelect').options].find(o=>o.value===currentUser.securityQuestion);
+    if(opt) $('securityQuestionSelect').value=currentUser.securityQuestion;
+  } else {
+    el.textContent='No recovery question set yet. Set one so you can reset your own password from the login screen if you forget it.';
+  }
+}
+function onSecurityQuestionChange(){
+  $('securityQuestionCustomWrap').classList.toggle('hidden',$('securityQuestionSelect').value!=='custom');
+}
+async function saveSecurityQuestion(){
+  const sel=$('securityQuestionSelect').value;
+  const question=sel==='custom'?$('securityQuestionCustom').value.trim():sel;
+  const answer=$('securityAnswer').value;
+  const currentPassword=$('securityQuestionPassword').value;
+  if(!question) return alert('Choose or write a recovery question.');
+  if(!answer.trim()) return alert('Enter an answer to your recovery question.');
+  if(!currentPassword) return alert('Enter your current password to confirm this change.');
+  try{
+    await apiFetch('/api/account/security-question',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,answer,currentPassword})});
+    currentUser.securityQuestion=question;
+    $('securityAnswer').value='';$('securityQuestionPassword').value='';$('securityQuestionCustom').value='';
+    renderSecurityQuestionStatus();
+    alert('Recovery question saved.');
+  }catch(err){ alert(err.message); }
+}
+
+/* ---------------- Audit Report (admin only) ---------------- */
+// Logs a business-event entry to the server-side audit log. The actor
+// identity is stamped server-side from the verified session, so this
+// can't be used to forge entries as someone else — only the category/
+// action/details text is client-supplied.
+async function recordAudit(category, action, details){
+  try{ await apiFetch('/api/audit-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category,action,details})}); }
+  catch(err){ console.error('Failed to record audit entry:', err); }
+}
+let auditEntries=[];
+async function loadAuditLog(){
+  if(!currentUser||currentUser.role!=='admin')return;
+  try{
+    const body=await apiFetch('/api/audit-log');
+    auditEntries=body.entries||[];
+    populateAuditCategoryFilter();
+    renderAuditLog();
+  }catch(err){
+    $('auditRows').innerHTML=`<tr><td colspan="7" class="muted">Could not load audit log: ${esc(err.message)}</td></tr>`;
+  }
+}
+function populateAuditCategoryFilter(){
+  const sel=$('auditCategoryFilter'),current=sel.value;
+  const cats=[...new Set(auditEntries.map(e=>e.category))].sort();
+  sel.innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value=cats.includes(current)?current:'';
+}
+function updateAuditPeriodLabel(){
+  const type=$('auditPeriodType').value;
+  if(type==='all'){ $('auditPeriodLabel').textContent='Showing all-time audit entries.'; renderAuditLog(); return; }
+  const d=$('auditDate').value;
+  if(!d){ $('auditPeriodLabel').textContent='Choose a date for the period.'; return; }
+  const r=periodRange(type,d);
+  if(!r)return;
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('auditPeriodLabel').textContent=`${names[type]}: ${r.start} to ${r.end}`;
+  renderAuditLog();
+}
+function renderAuditLog(){
+  const search=($('auditSearch').value||'').toLowerCase().trim();
+  const category=$('auditCategoryFilter').value;
+  const periodType=$('auditPeriodType').value;
+  const range=periodType==='all'?null:periodRange(periodType,$('auditDate').value);
+  const filtered=auditEntries.filter(e=>{
+    if(category&&e.category!==category)return false;
+    if(range&&(e.date<range.start||e.date>range.end))return false;
+    if(search){
+      const hay=[e.username,e.role,e.category,e.action,e.details].join(' ').toLowerCase();
+      if(!hay.includes(search))return false;
+    }
+    return true;
+  });
+  $('auditRows').innerHTML=filtered.length?filtered.map(e=>`<tr><td>${esc(e.date)}</td><td>${esc(e.time)}</td><td>${esc(e.username)}</td><td><span class="badge">${esc(e.role)}</span></td><td>${esc(e.category)}</td><td>${esc(e.action)}</td><td>${esc(e.details)}</td></tr>`).join(''):'<tr><td colspan="7" class="muted">No audit entries found.</td></tr>';
+  $('auditSummary').textContent=`${filtered.length} of ${auditEntries.length} entries`;
+}
+function clearAuditFilters(){$('auditSearch').value='';$('auditCategoryFilter').value='';$('auditPeriodType').value='all';$('auditDate').value='';updateAuditPeriodLabel()}
+async function clearAuditLog(){
+  if(!confirm('Clear the ENTIRE audit log? This cannot be undone.'))return;
+  try{
+    await apiFetch('/api/audit-log',{method:'DELETE'});
+    await loadAuditLog();
+  }catch(err){ alert(err.message); }
+}
+
+window.doLogin=doLogin;window.showForgotPassword=showForgotPassword;window.hideForgotPassword=hideForgotPassword;window.fpLookupQuestion=fpLookupQuestion;window.fpSubmitReset=fpSubmitReset;window.logout=logout;window.go=go;window.setQty=setQty;window.addToCart=addToCart;window.completeSale=completeSale;window.addProduct=addProduct;window.renderStock=renderStock;window.renderHistory=renderHistory;window.clearHistoryFilters=clearHistoryFilters;window.loadReport=loadReport;window.clearReport=clearReport;window.loadPeriodicReport=loadPeriodicReport;window.loadProfitPeriodicReport=loadProfitPeriodicReport;window.updateProfitPeriodLabel=updateProfitPeriodLabel;window.updatePeriodLabel=updatePeriodLabel;window.loadExpenditurePeriodicReport=loadExpenditurePeriodicReport;window.updateExpPeriodLabel=updateExpPeriodLabel;window.addExpenditureMain=addExpenditureMain;window.deleteExpenditureMain=deleteExpenditureMain;window.saveBusinessSettings=saveBusinessSettings;window.closeModal=closeModal;window.updatePreview=updatePreview;window.openEditStock=openEditStock;window.closeEditStockModal=closeEditStockModal;window.saveEditStock=saveEditStock;window.deleteProduct=deleteProduct;window.deleteSale=deleteSale;window.clearAllHistory=clearAllHistory;window.clearAllExpenditures=clearAllExpenditures;window.removeCart=i=>{cart.splice(i,1);renderCart()};window.addUser=addUser;window.saveUserRow=saveUserRow;window.resetUserPassword=resetUserPassword;window.deleteUser=deleteUser;window.changeMyPassword=changeMyPassword;window.onSecurityQuestionChange=onSecurityQuestionChange;window.saveSecurityQuestion=saveSecurityQuestion;window.loadAuditLog=loadAuditLog;window.renderAuditLog=renderAuditLog;window.clearAuditFilters=clearAuditFilters;window.clearAuditLog=clearAuditLog;window.togglePendingFields=togglePendingFields;window.updatePendPeriodLabel=updatePendPeriodLabel;window.clearPendingFilters=clearPendingFilters;window.renderPending=renderPending;window.openRecordPayment=openRecordPayment;window.closeRecordPaymentModal=closeRecordPaymentModal;window.submitRecordPayment=submitRecordPayment;window.generatePendingPDF=generatePendingPDF;window.updateAuditPeriodLabel=updateAuditPeriodLabel;window.generateStockPeriodicPDF=generateStockPeriodicPDF;window.loadStockPeriodicReport=loadStockPeriodicReport;window.updateStockPeriodLabel=updateStockPeriodLabel;
+window.generateStockPDF=generateStockPDF;window.generateExpenditurePDF=generateExpenditurePDF;window.generateReportsPDF=generateReportsPDF;
+
+function renderAll(){renderProductsSelect();renderStock();renderCart();renderToday();renderRecent();renderHistory();renderReportCards();renderExpendituresMain();renderPending();loadSettings();if(!$('expPeriodDate').value)$('expPeriodDate').value=today();updateExpPeriodLabel();if(!$('reportDate').value)$('reportDate').value=today();if(!$('profitPeriodDate').value)$('profitPeriodDate').value=today();if(!$('periodDate').value)$('periodDate').value=today();if(!$('expPeriodDate').value)$('expPeriodDate').value=today();if(!$('pendPeriodDate').value)$('pendPeriodDate').value=today();updatePeriodLabel();updateExpPeriodLabel();}
+function renderProductsSelect(){
+  products.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),undefined,{sensitivity:'base'}));
+  const search=($('productSearch')?.value||'').trim().toLowerCase();
+  const available=products.filter(p=>Number(p.stock)>0 && (p.name+' '+p.size).toLowerCase().includes(search));
+  $('productSelect').innerHTML=available.length?available.map(p=>`<option value="${p.id}">${esc(p.name)} ${esc(p.size)} — 1 unit KES ${money(p.price)} (stock ${qtyFmt(p.stock)})</option>`).join(''):'<option value="">No matching product</option>';
+  updatePreview();
+}
+function updatePreview(){const p=products.find(x=>x.id===$('productSelect').value),q=Number($('qty').value);if(!p||q<=0){$('calcPreview').textContent='Select a product and enter quantity.';return}const total=Number(p.price)*q;$('calcPreview').innerHTML=`<b>${esc(p.name)} ${esc(p.size)}</b><br>1 full unit = KES ${money(p.price)}<br><b>${qtyFmt(q)} unit = KES ${money(total)}</b>${q<1?`<br><span class="muted">Fractional sale: ${qtyFmt(q)} × KES ${money(p.price)}</span>`:''}`}
+$('qty').addEventListener('input',updatePreview);
+
+function setQty(q){$('qty').value=q;updatePreview()}
+function addToCart(){const p=products.find(x=>x.id===$('productSelect').value),q=Number($('qty').value);if(!p||q<=0)return alert('Select a product and enter a valid quantity.');const ex=cart.find(x=>x.productId===p.id),already=ex?ex.qty:0;if(already+q>Number(p.stock)+1e-9)return alert('Not enough stock.');if(ex){ex.qty+=q;ex.buyingPrice=Number(p.buyingPrice)||0}else cart.push({productId:p.id,name:p.name,size:p.size,price:Number(p.price),buyingPrice:Number(p.buyingPrice)||0,qty:q});$('qty').value=1;renderCart();updatePreview()}
+function renderCart(){$('cart').innerHTML=cart.map((x,i)=>`<tr><td>${esc(x.name)}<br><span class="muted">${esc(x.size)}</span></td><td>${qtyFmt(x.qty)}</td><td>KES ${money(x.price*x.qty)}</td><td><button class="danger" onclick="removeCart(${i})">X</button></td></tr>`).join('');$('total').textContent=money(cart.reduce((a,x)=>a+x.price*x.qty,0));}
+function normalizeSale(s){
+  if(s.paymentStatus==null){
+    s.paymentStatus='paid'; s.amountPaid=Number(s.total)||0; s.balance=0;
+  } else {
+    s.amountPaid=Number(s.amountPaid||0);
+    s.balance=Number(s.balance!=null?s.balance:(Number(s.total)-s.amountPaid));
+  }
+  s.payments=s.payments||[];
+  s.customerName=s.customerName||'';s.customerPhone=s.customerPhone||'';s.dueDate=s.dueDate||'';
+  return s;
+}
+function togglePendingFields(){$('pendingFields').classList.toggle('hidden', !$('pendingToggle').checked)}
+async function completeSale(){
+  if(!cart.length)return alert('Cart is empty.');
+  const isPending=$('pendingToggle').checked;
+  const payload={ items: cart.map(x=>({productId:x.productId, qty:x.qty})), payment: $('payment').value };
+  if(isPending){
+    const customerName=$('pendingCustomer').value.trim();
+    if(!customerName) return alert("Enter the customer's name for a credit sale, so you can follow up later.");
+    payload.paymentStatus='pending';
+    payload.amountPaid=Number($('pendingDeposit').value)||0;
+    payload.customerName=customerName;
+    payload.customerPhone=$('pendingPhone').value.trim();
+    payload.dueDate=$('pendingDue').value;
+  }
+  try{
+    const body=await apiFetch('/api/sales',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    sales.unshift(normalizeSale(body.sale));
+    await loadProducts();
+    if(body.sale.paymentStatus==='pending'){
+      alert(`Sale recorded as PENDING.\nTotal: KES ${money(body.sale.total)}\nPaid now: KES ${money(body.sale.amountPaid)}\nBalance owed: KES ${money(body.sale.balance)}`);
+    } else {
+      alert(`Sale completed.\nTotal: KES ${money(body.sale.total)}\nPayment: ${body.sale.payment}`);
+    }
+    cart=[];
+    $('pendingToggle').checked=false; togglePendingFields();
+    $('pendingCustomer').value='';$('pendingPhone').value='';$('pendingDeposit').value=0;$('pendingDue').value='';
+    renderAll();
+  }catch(err){ alert(err.message); }
+}
+async function addProduct(){
+  const name=$('pname').value.trim(),size=$('size').value.trim(),buyingPrice=Number($('buyingPrice').value),price=Number($('price').value),stock=Number($('stockInput').value);
+  if(!name||!size||!Number.isFinite(buyingPrice)||buyingPrice<0||!Number.isFinite(price)||price<0||!Number.isFinite(stock)||stock<0)return alert('Enter product name, size, price and stock.');
+  try{
+    const body=await apiFetch('/api/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,size,buyingPrice,price,stock})});
+    await loadProducts();
+    ['pname','size','buyingPrice','price','stockInput'].forEach(id=>$(id).value='');
+    renderAll();
+    alert(body.merged?'Existing product updated and stock added.':'Product added.');
+  }catch(err){ alert(err.message); }
+}
+let editStockProductId=null;
+function openEditStock(id){
+  if(!currentUser||currentUser.role!=='admin')return alert('Only admins can edit stock.');
+  const p=products.find(x=>x.id===id);if(!p)return;
+  editStockProductId=id;
+  $('editStockProductName').textContent=`${p.name} ${p.size}`.trim();
+  $('editStockSize').value=p.size||'';
+  $('editStockBuying').value=Number(p.buyingPrice||0);
+  $('editStockSelling').value=Number(p.price||0);
+  $('editStockQty').value=Number(p.stock||0);
+  $('editStockModal').classList.remove('hidden');
+}
+function closeEditStockModal(){$('editStockModal').classList.add('hidden');editStockProductId=null}
+async function saveEditStock(){
+  if(!editStockProductId)return;
+  const size=$('editStockSize').value.trim();
+  const buyingPrice=Number($('editStockBuying').value);
+  const price=Number($('editStockSelling').value);
+  const stock=Number($('editStockQty').value);
+  if(!size||!Number.isFinite(buyingPrice)||buyingPrice<0||!Number.isFinite(price)||price<0||!Number.isFinite(stock)||stock<0)
+    return alert('Enter a valid size, buying price, selling price and stock.');
+  try{
+    const body=await apiFetch(`/api/products/${editStockProductId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({size,buyingPrice,price,stock})});
+    await loadProducts();
+    closeEditStockModal();
+    renderAll();
+    alert(`${body.product.name} updated.`);
+  }catch(err){ alert(err.message); }
+}
+async function deleteProduct(id){
+  const p=products.find(x=>x.id===id);if(!p)return;
+  if(!confirm(`Delete ${p.name} ${p.size}?\nThis will remove the product from Stock Management.`))return;
+  try{
+    await apiFetch(`/api/products/${id}`,{method:'DELETE'});
+    cart=cart.filter(x=>x.productId!==id);
+    await loadProducts();
+    renderAll();
+    alert(`${p.name} deleted from stock management.`);
+  }catch(err){ alert(err.message); }
+}
+function renderStock(){
+  products.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),undefined,{sensitivity:'base'}));
+  const s=($('stockSearch').value||'').toLowerCase();
+  const isAdmin=currentUser&&currentUser.role==='admin';
+  $('products').innerHTML=products.filter(p=>(p.name+' '+p.size).toLowerCase().includes(s)).map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.size)}</td><td>KES ${Number(p.buyingPrice||0).toFixed(2)}</td><td>KES ${money(p.price)}</td><td><span class="badge">${qtyFmt(p.stock)}</span></td><td>${isAdmin?`<button onclick="openEditStock('${p.id}')">Edit</button> `:''}<button class="danger" onclick="deleteProduct('${p.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">No products found.</td></tr>';$('stockCount').textContent=products.length}
+function daySales(date){return sales.filter(s=>s.date===date)}
+// Reports (Manager Dashboard / Daily & Periodic Analysis) are scoped so
+// admins see every attendant's sales, while non-admin users only ever
+// see sales they personally recorded — the raw `sales` array (used for
+// Sales-tab metrics, Profit and History) is left untouched.
+function reportsScopeSales(){
+  if(!currentUser) return [];
+  if(currentUser.role==='admin') return sales;
+  return sales.filter(s=>s.attendantId===currentUser.id);
+}
+// A sale only counts toward "sales" figures (Today's Activity, Reports,
+// Profit) once it's fully paid. Credit sales keep their stock deduction
+// immediately (the goods already left the shop) but their KES amount is
+// excluded from revenue/profit reporting while payment is outstanding.
+// Once the balance is cleared, the server flips paymentStatus to 'paid'
+// and — since these reports are always computed live — it starts
+// counting automatically, under its original sale date.
+function isSettled(s){ return s.paymentStatus !== 'pending'; }
+
+// ---------------- Pending Payments (credit sales) ----------------
+function pendPeriodRangeOrNull(){
+  const type=$('pendPeriodType').value;
+  if(type==='all') return null;
+  const d=$('pendPeriodDate').value;
+  if(!d) return null;
+  return periodRange(type,d);
+}
+function updatePendPeriodLabel(){
+  const type=$('pendPeriodType').value;
+  if(type==='all'){ $('pendPeriodLabel').textContent='Showing all-time pending sales.'; renderPending(); return; }
+  const d=$('pendPeriodDate').value;
+  if(!d){ $('pendPeriodLabel').textContent='Choose a date for the period.'; return; }
+  const r=periodRange(type,d);
+  if(!r)return;
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('pendPeriodLabel').textContent=`${names[type]}: ${r.start} to ${r.end}`;
+  renderPending();
+}
+function clearPendingFilters(){
+  $('pendPeriodType').value='all';$('pendPeriodDate').value='';$('pendStatusFilter').value='outstanding';$('pendSearch').value='';
+  updatePendPeriodLabel();
+}
+// A sale counts as a "credit sale" if it was ever marked pending: it has a
+// customer name recorded, started as paymentStatus 'pending', or picked up
+// more than one payment entry over time.
+function pendingPeriodList(){
+  const scoped=reportsScopeSales();
+  const range=pendPeriodRangeOrNull();
+  let list=scoped.filter(s=>s.customerName||s.paymentStatus==='pending'||(s.payments&&s.payments.length>1));
+  if(range) list=list.filter(s=>s.date>=range.start&&s.date<=range.end);
+  return {list, range};
+}
+function pendingFilteredList(list){
+  const status=$('pendStatusFilter').value;
+  const search=($('pendSearch').value||'').toLowerCase().trim();
+  let out=list;
+  if(status==='outstanding') out=out.filter(s=>s.balance>0.005);
+  else if(status==='settled') out=out.filter(s=>s.balance<=0.005);
+  if(search) out=out.filter(s=>[s.customerName,s.customerPhone,s.attendant].join(' ').toLowerCase().includes(search));
+  return out.slice().sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+}
+function renderPending(){
+  if(!currentUser) return;
+  const {list:periodList, range}=pendingPeriodList();
+  const filtered=pendingFilteredList(periodList);
+  const todayStr=today();
+  const outstandingTotal=periodList.filter(s=>s.balance>0.005).reduce((a,s)=>a+Number(s.balance||0),0);
+  const openCount=periodList.filter(s=>s.balance>0.005).length;
+  const overdueCount=periodList.filter(s=>s.balance>0.005&&s.dueDate&&s.dueDate<todayStr).length;
+  let collected=0;
+  periodList.forEach(s=>(s.payments||[]).forEach(p=>{ if(!range||(p.date>=range.start&&p.date<=range.end)) collected+=Number(p.amount||0); }));
+  $('pendOutstanding').textContent='KES '+money(outstandingTotal);
+  $('pendOpenCount').textContent=openCount;
+  $('pendCollected').textContent='KES '+money(collected);
+  $('pendOverdue').textContent=overdueCount;
+  $('pendingRows').innerHTML=filtered.length?filtered.map(s=>{
+    const overdue=s.balance>0.005&&s.dueDate&&s.dueDate<todayStr;
+    const statusBadge=s.balance<=0.005?'<span class="badge">Settled</span>':`<span class="badge" style="background:var(--brick);color:#fff">${overdue?'Overdue':'Outstanding'}</span>`;
+    return `<tr><td>${esc(s.date)}</td><td>${esc(s.customerName||'—')}${s.customerPhone?`<br><span class="muted">${esc(s.customerPhone)}</span>`:''}</td><td>${esc(s.attendant||'—')}</td><td>${(s.items||[]).map(x=>esc(x.name)+' × '+qtyFmt(x.qty)).join('<br>')}</td><td>KES ${money(s.total)}</td><td>KES ${money(s.amountPaid)}</td><td>KES ${money(s.balance)}</td><td>${esc(s.dueDate||'—')}</td><td>${statusBadge}</td><td>${s.balance>0.005?`<button onclick="openRecordPayment('${s.id}')">Record Payment</button>`:'—'}</td></tr>`;
+  }).join(''):'<tr><td colspan="10" class="muted">No credit sales found.</td></tr>';
+}
+let recordPaymentSaleId=null;
+function openRecordPayment(id){
+  const s=sales.find(x=>x.id===id); if(!s)return;
+  recordPaymentSaleId=id;
+  $('rpCustomerName').textContent=s.customerName||'—';
+  $('rpSaleSummary').textContent=`Total KES ${money(s.total)} • Paid KES ${money(s.amountPaid)} • Balance KES ${money(s.balance)}`;
+  $('rpAmount').value=Number(s.balance).toFixed(2);
+  $('recordPaymentModal').classList.remove('hidden');
+}
+function closeRecordPaymentModal(){$('recordPaymentModal').classList.add('hidden');recordPaymentSaleId=null}
+async function submitRecordPayment(){
+  if(!recordPaymentSaleId)return;
+  const amount=Number($('rpAmount').value);
+  if(!Number.isFinite(amount)||amount<=0) return alert('Enter a payment amount greater than 0.');
+  try{
+    const body=await apiFetch(`/api/sales/${recordPaymentSaleId}/pay`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})});
+    const idx=sales.findIndex(x=>x.id===recordPaymentSaleId);
+    if(idx>=0) sales[idx]=normalizeSale(body.sale);
+    closeRecordPaymentModal();
+    renderPending();
+    alert(`Payment recorded. New balance: KES ${money(body.sale.balance)}`);
+  }catch(err){ alert(err.message); }
+}
+function generatePendingPDF(){
+  const {list:periodList}=pendingPeriodList();
+  const filtered=pendingFilteredList(periodList);
+  const rows=filtered.map(s=>`<tr><td>${esc(s.date)}</td><td>${esc(s.customerName||'—')}${s.customerPhone?' — '+esc(s.customerPhone):''}</td><td>${esc(s.attendant||'—')}</td><td>KES ${money(s.total)}</td><td>KES ${money(s.amountPaid)}</td><td>KES ${money(s.balance)}</td><td>${esc(s.dueDate||'—')}</td><td>${s.balance<=0.005?'Settled':'Outstanding'}</td></tr>`).join('')
+    || '<tr><td colspan="8" class="meta">No credit sales in this period.</td></tr>';
+  const scopeNote=(currentUser&&currentUser.role!=='admin')?`<p class="meta">Showing credit sales recorded by you (${esc(currentUser.username)}) only.</p>`:'';
+  const html=`${scopeNote}<h2>Pending Payments</h2><table><thead><tr><th>Date</th><th>Customer</th><th>Attendant</th><th>Total</th><th>Paid</th><th>Balance</th><th>Due</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+  openPrintWindow('Pending Payments Report', html);
+}
+function renderToday(){const ss=daySales(today()).filter(isSettled);$('todaySales').textContent='KES '+money(ss.reduce((a,s)=>a+Number(s.total),0));$('todayTx').textContent=ss.length;$('todayItems').textContent=ss.reduce((a,s)=>a+(s.items||[]).reduce((b,x)=>b+Number(x.qty),0),0)}
+function renderRecent(){const list=sales.slice(0,5);$('recentSales').innerHTML=list.length?list.map(s=>`<div style="padding:9px 0;border-bottom:1px solid #eee"><b>KES ${money(s.total)}</b> — ${esc(s.attendant||'—')}<br><span class="muted">${esc(s.date)} ${esc(s.time)} • ${esc(s.payment)}</span></div>`).join(''):'No sales yet.'}
+function populateHistoryAttendants(){
+  const sel=$('historyAtt');
+  const current=sel.value;
+  const seen=new Map();
+  sales.forEach(s=>{ if(s.attendantId && !seen.has(s.attendantId)) seen.set(s.attendantId, s.attendant||s.attendantId); });
+  sel.innerHTML='<option value="">All attendants</option>'+[...seen.entries()].map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');
+  sel.value=seen.has(current)?current:'';
+}
+function renderHistory(){
+  populateHistoryAttendants();
+  const search=($('historySearch').value||'').toLowerCase().trim(),
+        date=$('historyDate').value,att=$('historyAtt').value;
+  const isAdmin=currentUser&&currentUser.role==='admin';
+  const filtered=sales.filter(s=>{
+    if(date&&s.date!==date)return false;
+    if(att&&s.attendantId!==att)return false;
+    const items=(s.items||[]).map(x=>x.name+' '+x.size+' '+x.qty).join(' ');
+    return !search||[s.date,s.time,s.payment,s.attendant,items].join(' ').toLowerCase().includes(search)
+  });
+  $('salesHistory').innerHTML=filtered.length
+    ? filtered.map(s=>`<tr><td>${esc(s.date)}</td><td>${esc(s.time)}</td><td>${esc(s.attendant||'—')}</td><td>${(s.items||[]).map(x=>esc(x.name)+' × '+qtyFmt(x.qty)).join('<br>')}</td><td>KES ${money(s.total)}</td><td><span class="badge">${esc(s.payment)}</span>${s.paymentStatus==='pending'?` <span class="badge" style="background:var(--brick);color:#fff">Pending KES ${money(s.balance)}</span>`:''}</td><td>${isAdmin?`<button class="danger" onclick="deleteSale('${s.id}')">Delete</button>`:'<span class="muted">—</span>'}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="muted">No sales found.</td></tr>';
+  $('historySummary').textContent=`${filtered.length} transaction${filtered.length===1?'':'s'} • Total: KES ${money(filtered.reduce((a,s)=>a+Number(s.total||0),0))}`
+  const clearBtn=document.querySelector('#history button.danger[onclick="clearAllHistory()"]');
+  if(clearBtn) clearBtn.style.display=isAdmin?'':'none';
+}
+async function deleteSale(id){
+  if(!confirm('Delete this sale from history? The items sold will be added back to stock automatically.'))return;
+  try{ await apiFetch(`/api/sales/${id}`,{method:'DELETE'}); await loadSales(); await loadProducts(); renderAll(); }
+  catch(err){ alert(err.message); }
+}
+async function clearAllHistory(){
+  if(!sales.length)return alert('There is no sales history to clear.');
+  if(!confirm('Clear ALL sales history? Every item sold will be added back to stock automatically. This cannot be undone.'))return;
+  try{ await apiFetch('/api/sales',{method:'DELETE'}); await loadSales(); await loadProducts(); renderAll(); alert('Sales history cleared and stock restored.'); }
+  catch(err){ alert(err.message); }
+}
+function clearHistoryFilters(){$('historySearch').value='';$('historyDate').value='';$('historyAtt').value='';renderHistory()}
+function renderReportCards(){const now=new Date(),t=today(),month=t.slice(0,7),rs=reportsScopeSales().filter(isSettled),ts=rs.filter(s=>s.date===t);$('rToday').textContent='KES '+money(ts.reduce((a,s)=>a+Number(s.total),0));$('rMonth').textContent='KES '+money(rs.filter(s=>String(s.date).startsWith(month)).reduce((a,s)=>a+Number(s.total),0));$('rTx').textContent=rs.length;$('rLow').textContent=products.filter(p=>Number(p.stock)<=5).length}
+function loadReport(){
+  const d=$('reportDate').value;
+  if(!d)return alert('Choose a date.');
+  const ss=reportsScopeSales().filter(isSettled).filter(s=>s.date===d);
+  const groups={};
+  ss.forEach(s=>(s.items||[]).forEach(x=>{
+    const key=x.productId||((x.name||'')+'|'+(x.size||''));
+    if(!groups[key]) groups[key]={name:x.name||'—',size:x.size||'—',price:Number(x.price)||0,buyingPrice:Number((products.find(p=>p.id===x.productId)||{}).buyingPrice)||0,qty:0,sales:0,transactions:0};
+    groups[key].qty+=Number(x.qty)||0;
+    groups[key].sales+=(Number(x.price)||0)*(Number(x.qty)||0);
+    groups[key].transactions+=1;
+  }));
+  const rows=Object.values(groups).sort((a,b)=>b.sales-a.sales);
+  const totalSales=ss.reduce((a,s)=>a+Number(s.total||0),0);
+  const totalQty=ss.reduce((a,s)=>a+(s.items||[]).reduce((b,x)=>b+(Number(x.qty)||0),0),0);
+  const paymentTotals={};
+  ss.forEach(s=>paymentTotals[s.payment]=(paymentTotals[s.payment]||0)+Number(s.total||0));
+  $('reportBody').innerHTML=`
+    <h3>Daily Product Sales Report — ${esc(d)}</h3>
+    <p class="muted">Credit sales are excluded here until fully paid — see the Pending tab.</p>
+    <div class="cards">
+      <div class="metric"><b>TOTAL SALES</b><strong>KES ${money(totalSales)}</strong></div>
+      <div class="metric"><b>TRANSACTIONS</b><strong>${ss.length}</strong></div>
+      <div class="metric"><b>TOTAL QUANTITY</b><strong>${qtyFmt(totalQty)}</strong></div>
+      <div class="metric"><b>PRODUCTS SOLD</b><strong>${rows.length}</strong></div>
+    </div>
+    <br>
+    <h3>Products Sold — Combined for the Whole Day</h3>
+    <div style="overflow:auto"><table>
+      <thead><tr><th>#</th><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Quantity Sold</th><th>Sales Amount</th></tr></thead>
+      <tbody>${rows.length?rows.map((r,i)=>`<tr><td>${i+1}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.size)}</td><td>KES ${Number(r.buyingPrice||0).toFixed(2)}</td><td>KES ${money(r.price)}</td><td>${qtyFmt(r.qty)}</td><td><b>KES ${money(r.sales)}</b></td></tr>`).join(''):`<tr><td colspan="7" class="muted">No product sales for this date.</td></tr>`}</tbody>
+      <tfoot><tr><th colspan="5" class="right">DAY TOTAL</th><th>${qtyFmt(totalQty)}</th><th>KES ${money(totalSales)}</th></tr></tfoot>
+    </table></div>
+    <br>
+    <h3>Payment Summary</h3>
+    <table><thead><tr><th>Payment Method</th><th>Sales Amount</th></tr></thead><tbody>
+      ${Object.keys(paymentTotals).length?Object.entries(paymentTotals).map(([k,v])=>`<tr><td><span class="badge">${esc(k)}</span></td><td>KES ${money(v)}</td></tr>`).join(''):`<tr><td colspan="2" class="muted">No sales.</td></tr>`}
+    </tbody></table>`;
+}
+
+function periodRange(type, dateStr){
+  const base=new Date(dateStr+'T00:00:00');
+  if(Number.isNaN(base.getTime())) return null;
+  let start=new Date(base), end=new Date(base);
+  if(type==='daily'){
+    // same day
+  }else if(type==='weekly'){
+    const day=(base.getDay()+6)%7; // Monday = 0
+    start.setDate(base.getDate()-day);
+    end=new Date(start); end.setDate(start.getDate()+6);
+  }else if(type==='monthly'){
+    start=new Date(base.getFullYear(),base.getMonth(),1);
+    end=new Date(base.getFullYear(),base.getMonth()+1,0);
+  }else if(type==='yearly'){
+    start=new Date(base.getFullYear(),0,1);
+    end=new Date(base.getFullYear(),11,31);
+  }
+  const iso=d=>d.toISOString().slice(0,10);
+  return {start:iso(start),end:iso(end)};
+}
+function updatePeriodLabel(){
+  const type=$('periodType').value, d=$('periodDate').value;
+  if(!d){$('periodLabel').textContent='Select a date and analysis period.';return}
+  const r=periodRange(type,d);
+  if(!r)return;
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('periodLabel').textContent=`${names[type]} analysis: ${r.start} to ${r.end}`;
+}
+function loadPeriodicReport(){
+  const type=$('periodType').value, d=$('periodDate').value;
+  if(!d)return alert('Choose a date for the analysis.');
+  const range=periodRange(type,d);
+  if(!range)return alert('Choose a valid date.');
+
+  const ss=reportsScopeSales().filter(isSettled).filter(s=>s.date>=range.start&&s.date<=range.end);
+  const groups={};
+  ss.forEach(s=>(s.items||[]).forEach(x=>{
+    const key=x.productId||((x.name||'')+'|'+(x.size||''));
+    if(!groups[key]) groups[key]={name:x.name||'—',size:x.size||'—',price:Number(x.price)||0,buyingPrice:Number((products.find(p=>p.id===x.productId)||{}).buyingPrice)||0,qty:0,sales:0,transactions:0};
+    groups[key].qty+=Number(x.qty)||0;
+    groups[key].sales+=(Number(x.price)||0)*(Number(x.qty)||0);
+    groups[key].transactions+=1;
+  }));
+  const rows=Object.values(groups).sort((a,b)=>b.sales-a.sales);
+  const totalSales=ss.reduce((a,s)=>a+Number(s.total||0),0);
+  const totalQty=ss.reduce((a,s)=>a+(s.items||[]).reduce((b,x)=>b+(Number(x.qty)||0),0),0);
+  const paymentTotals={};
+  ss.forEach(s=>paymentTotals[s.payment]=(paymentTotals[s.payment]||0)+Number(s.total||0));
+
+  // Break the period into calendar days for a useful trend table.
+  const dayMap={};
+  ss.forEach(s=>{
+    if(!dayMap[s.date])dayMap[s.date]={sales:0,qty:0,tx:0};
+    dayMap[s.date].sales+=Number(s.total||0);
+    dayMap[s.date].tx+=1;
+    dayMap[s.date].qty+=(s.items||[]).reduce((a,x)=>a+(Number(x.qty)||0),0);
+  });
+  const dayRows=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0]));
+
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('reportBody').innerHTML=`
+    <h3>${names[type]} Sales Analysis — ${esc(range.start)} to ${esc(range.end)}</h3>
+    <p class="muted">Credit sales are excluded here until fully paid — see the Pending tab.</p>
+    <div class="cards">
+      <div class="metric"><b>TOTAL SALES</b><strong>KES ${money(totalSales)}</strong></div>
+      <div class="metric"><b>TRANSACTIONS</b><strong>${ss.length}</strong></div>
+      <div class="metric"><b>TOTAL QUANTITY</b><strong>${qtyFmt(totalQty)}</strong></div>
+      <div class="metric"><b>PRODUCTS SOLD</b><strong>${rows.length}</strong></div>
+    </div>
+    <br>
+    <h3>Products Sold — Combined for the Period</h3>
+    <div style="overflow:auto"><table>
+      <thead><tr><th>#</th><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Quantity Sold</th><th>Sales Amount</th></tr></thead>
+      <tbody>${rows.length?rows.map((r,i)=>`<tr><td>${i+1}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.size)}</td><td>KES ${Number(r.buyingPrice||0).toFixed(2)}</td><td>KES ${money(r.price)}</td><td>${qtyFmt(r.qty)}</td><td><b>KES ${money(r.sales)}</b></td></tr>`).join(''):`<tr><td colspan="7" class="muted">No sales for this period.</td></tr>`}</tbody>
+      <tfoot><tr><th colspan="5" class="right">PERIOD TOTAL</th><th>${qtyFmt(totalQty)}</th><th>KES ${money(totalSales)}</th></tr></tfoot>
+    </table></div>
+    <br>
+    <h3>Payment Summary</h3>
+    <table><thead><tr><th>Payment Method</th><th>Sales Amount</th></tr></thead><tbody>
+      ${Object.keys(paymentTotals).length?Object.entries(paymentTotals).map(([k,v])=>`<tr><td><span class="badge">${esc(k)}</span></td><td>KES ${money(v)}</td></tr>`).join(''):`<tr><td colspan="2" class="muted">No sales.</td></tr>`}
+    </tbody></table>
+    <br>
+    <h3>Sales Trend by Day</h3>
+    <div style="overflow:auto"><table>
+      <thead><tr><th>Date</th><th>Transactions</th><th>Quantity Sold</th><th>Sales</th></tr></thead>
+      <tbody>${dayRows.length?dayRows.map(([day,v])=>`<tr><td>${esc(day)}</td><td>${v.tx}</td><td>${qtyFmt(v.qty)}</td><td><b>KES ${money(v.sales)}</b></td></tr>`).join(''):`<tr><td colspan="4" class="muted">No daily activity for this period.</td></tr>`}</tbody>
+    </table></div>`;
+  updatePeriodLabel();
+}
+
+function updateProfitPeriodLabel(){const type=$('profitPeriodType').value,d=$('profitPeriodDate').value;if(!d){$('profitPeriodLabel').textContent='Select a date and profit analysis period.';return}const r=periodRange(type,d);if(!r)return;const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};$('profitPeriodLabel').textContent=`${names[type]} profit analysis: ${r.start} to ${r.end}`}
+function loadProfitPeriodicReport(){
+  const type=$('profitPeriodType').value,d=$('profitPeriodDate').value;if(!d)return alert('Choose a date for the profit analysis.');
+  const range=periodRange(type,d);if(!range)return alert('Choose a valid date.');
+  const ss=sales.filter(isSettled).filter(s=>s.date>=range.start&&s.date<=range.end), groups={};
+  ss.forEach(s=>(s.items||[]).forEach(x=>{const p=products.find(p=>p.id===x.productId);const buy=Number(x.buyingPrice??(p?p.buyingPrice:0))||0;const sell=Number(x.price)||0;const qty=Number(x.qty)||0;const key=x.productId||((x.name||'')+'|'+(x.size||''));if(!groups[key])groups[key]={name:x.name||'—',size:x.size||'—',buyingPrice:buy,sellingPrice:sell,qty:0,sales:0,cost:0,profit:0,transactions:0};groups[key].qty+=qty;groups[key].sales+=sell*qty;groups[key].cost+=buy*qty;groups[key].profit+=(sell-buy)*qty;groups[key].transactions+=1}));
+  const rows=Object.values(groups).sort((a,b)=>b.profit-a.profit);const totalSales=ss.reduce((a,s)=>a+Number(s.total||0),0);const totalCost=rows.reduce((a,r)=>a+r.cost,0);const totalProfit=rows.reduce((a,r)=>a+r.profit,0);const margin=totalSales?totalProfit/totalSales*100:0;
+  const dayMap={};ss.forEach(s=>(s.items||[]).forEach(x=>{const p=products.find(p=>p.id===x.productId);const buy=Number(x.buyingPrice??(p?p.buyingPrice:0))||0;const sell=Number(x.price)||0;const qty=Number(x.qty)||0;if(!dayMap[s.date])dayMap[s.date]={sales:0,cost:0,profit:0,tx:0};dayMap[s.date].sales+=sell*qty;dayMap[s.date].cost+=buy*qty;dayMap[s.date].profit+=(sell-buy)*qty;dayMap[s.date].tx++}));
+  const dayRows=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0]));
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('profitPeriodicBody').innerHTML=`<h3>${names[type]} Profit Analysis — ${esc(range.start)} to ${esc(range.end)}</h3><p class="muted">Credit sales are excluded here until fully paid — see the Pending tab.</p><div class="cards"><div class="metric"><b>TOTAL SALES</b><strong>KES ${money(totalSales)}</strong></div><div class="metric"><b>TOTAL BUYING COST</b><strong>KES ${totalCost.toFixed(2)}</strong></div><div class="metric"><b>GROSS PROFIT</b><strong>KES ${totalProfit.toFixed(2)}</strong></div><div class="metric"><b>PROFIT MARGIN</b><strong>${margin.toFixed(2)}%</strong></div></div><br><h3>Profit by Product — Combined for the Period</h3><div style="overflow:auto"><table><thead><tr><th>#</th><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Quantity Sold</th><th>Sales</th><th>Buying Cost</th><th>Profit</th></tr></thead><tbody>${rows.length?rows.map((r,i)=>`<tr><td>${i+1}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.size)}</td><td>KES ${r.buyingPrice.toFixed(2)}</td><td>KES ${money(r.sellingPrice)}</td><td>${qtyFmt(r.qty)}</td><td>KES ${money(r.sales)}</td><td>KES ${r.cost.toFixed(2)}</td><td><b>KES ${r.profit.toFixed(2)}</b></td></tr>`).join(''):`<tr><td colspan="9" class="muted">No sales for this period.</td></tr>`}</tbody><tfoot><tr><th colspan="5" class="right">PERIOD TOTAL</th><th>${qtyFmt(rows.reduce((a,r)=>a+r.qty,0))}</th><th>KES ${money(totalSales)}</th><th>KES ${totalCost.toFixed(2)}</th><th>KES ${totalProfit.toFixed(2)}</th></tr></table></div><br><h3>Profit Trend by Day</h3><div style="overflow:auto"><table><thead><tr><th>Date</th><th>Transactions</th><th>Sales</th><th>Buying Cost</th><th>Profit</th></tr></thead><tbody>${dayRows.length?dayRows.map(([day,v])=>`<tr><td>${esc(day)}</td><td>${v.tx}</td><td>KES ${money(v.sales)}</td><td>KES ${v.cost.toFixed(2)}</td><td><b>KES ${v.profit.toFixed(2)}</b></td></tr>`).join(''):`<tr><td colspan="5" class="muted">No daily activity for this period.</td></tr>`}</tbody></table></div>`;
+  updateProfitPeriodLabel();
+}
+
+function deleteExpenditure(id){deleteExpenditureMain(id)}
+async function addExpenditureMain(){
+  const nature=$('expNatureMain').value.trim(), date=$('expDateMain').value, amount=Number($('expAmountMain').value);
+  if(!nature||!date||!Number.isFinite(amount)||amount<=0)return alert('Enter nature, date and amount.');
+  try{
+    await apiFetch('/api/expenditures',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature,date,amount})});
+    await loadExpenditures();
+    $('expNatureMain').value=''; $('expDateMain').value=''; $('expAmountMain').value='';
+    renderExpendituresMain();
+    alert('Expenditure added.');
+  }catch(err){ alert(err.message); }
+}
+async function deleteExpenditureMain(id){
+  if(!confirm('Delete this expenditure?'))return;
+  try{ await apiFetch(`/api/expenditures/${id}`,{method:'DELETE'}); await loadExpenditures(); renderExpendituresMain(); }
+  catch(err){ alert(err.message); }
+}
+async function clearAllExpenditures(){
+  if(!expenditures.length)return alert('There are no expenditures to clear.');
+  if(!confirm('Clear ALL expenditure records? This cannot be undone.'))return;
+  try{
+    await apiFetch('/api/expenditures',{method:'DELETE'});
+    await loadExpenditures();
+    renderExpendituresMain();
+    if($('expenditurePeriodicBody'))$('expenditurePeriodicBody').innerHTML='';
+  }catch(err){ alert(err.message); }
+}
+function renderExpendituresMain(){
+  const rows=[...expenditures].sort((a,b)=>b.date.localeCompare(a.date));
+  $('expenditureRowsMain').innerHTML=rows.length?
+    rows.map(x=>`<tr><td>${esc(x.nature)}</td><td>${esc(x.date)}</td><td>KES ${money(x.amount)}</td><td><button class="danger" onclick="deleteExpenditureMain('${x.id}')">Delete</button></td></tr>`).join(''):
+    '<tr><td colspan="4" class="muted">No expenditures recorded.</td></tr>';
+  $('expenditureTotalMain').textContent='KES '+money(expenditures.reduce((a,x)=>a+Number(x.amount||0),0));
+}
+function expPeriodRange(type,dateStr){
+  const base=new Date(dateStr+'T00:00:00'); if(Number.isNaN(base.getTime()))return null;
+  let start=new Date(base),end=new Date(base);
+  if(type==='weekly'){const day=(base.getDay()+6)%7;start.setDate(base.getDate()-day);end=new Date(start);end.setDate(start.getDate()+6)}
+  else if(type==='monthly'){start=new Date(base.getFullYear(),base.getMonth(),1);end=new Date(base.getFullYear(),base.getMonth()+1,0)}
+  else if(type==='yearly'){start=new Date(base.getFullYear(),0,1);end=new Date(base.getFullYear(),11,31)}
+  const iso=d=>d.toISOString().slice(0,10); return {start:iso(start),end:iso(end)};
+}
+function updateExpPeriodLabel(){
+  const type=$('expPeriodType').value,d=$('expPeriodDate').value;
+  if(!d){$('expPeriodLabel').textContent='Select a date and analysis period.';return}
+  const r=expPeriodRange(type,d), names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('expPeriodLabel').textContent=`${names[type]} expenditure analysis: ${r.start} to ${r.end}`;
+}
+function loadExpenditurePeriodicReport(){
+  const type=$('expPeriodType').value,d=$('expPeriodDate').value;
+  if(!d)return alert('Choose a date for the expenditure analysis.');
+  const r=expPeriodRange(type,d); if(!r)return alert('Choose a valid date.');
+  const ex=expenditures.filter(x=>x.date>=r.start&&x.date<=r.end);
+  const groups={};
+  ex.forEach(x=>{const k=x.nature.trim().toLowerCase();if(!groups[k])groups[k]={nature:x.nature,amount:0,count:0};groups[k].amount+=Number(x.amount||0);groups[k].count++});
+  const rows=Object.values(groups).sort((a,b)=>b.amount-a.amount);
+  const total=ex.reduce((a,x)=>a+Number(x.amount||0),0);
+  const dayMap={};
+  ex.forEach(x=>{if(!dayMap[x.date])dayMap[x.date]={amount:0,count:0};dayMap[x.date].amount+=Number(x.amount||0);dayMap[x.date].count++});
+  const days=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0]));
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('expenditurePeriodicBody').innerHTML=`
+    <h3>${names[type]} Expenditure Analysis — ${esc(r.start)} to ${esc(r.end)}</h3>
+    <div class="cards">
+      <div class="metric"><b>TOTAL EXPENDITURE</b><strong>KES ${money(total)}</strong></div>
+      <div class="metric"><b>ENTRIES</b><strong>${ex.length}</strong></div>
+      <div class="metric"><b>EXPENDITURE TYPES</b><strong>${rows.length}</strong></div>
+      <div class="metric"><b>AVERAGE ENTRY</b><strong>KES ${money(ex.length?total/ex.length:0)}</strong></div>
+    </div><br>
+    <h3>Expenditure by Nature</h3>
+    <div style="overflow:auto"><table><thead><tr><th>#</th><th>Nature of Expenditure</th><th>Entries</th><th>Total Amount</th></tr></thead>
+    <tbody>${rows.length?rows.map((x,i)=>`<tr><td>${i+1}</td><td><b>${esc(x.nature)}</b></td><td>${x.count}</td><td><b>KES ${money(x.amount)}</b></td></tr>`).join(''):'<tr><td colspan="4" class="muted">No expenditures for this period.</td></tr>'}</tbody>
+    <tfoot><tr><th colspan="2" class="right">PERIOD TOTAL</th><th>${ex.length}</th><th>KES ${money(total)}</th></tr></tfoot></table></div><br>
+    <h3>Expenditure Trend by Day</h3>
+    <div style="overflow:auto"><table><thead><tr><th>Date</th><th>Entries</th><th>Total Expenditure</th></tr></thead>
+    <tbody>${days.length?days.map(([day,v])=>`<tr><td>${esc(day)}</td><td>${v.count}</td><td><b>KES ${money(v.amount)}</b></td></tr>`).join(''):'<tr><td colspan="3" class="muted">No expenditure activity for this period.</td></tr>'}</tbody></table></div>`;
+  updateExpPeriodLabel();
+}
+function clearReport(){$('reportDate').value='';$('reportBody').innerHTML=''}
+
+/* ---------------- PDF generation (Stock / Expenditure / Reports) ----------------
+   Uses the browser's own print-to-PDF (window.print in a dedicated tab) so
+   it works fully offline with no extra libraries — the person picks "Save
+   as PDF" in the print dialog that opens. */
+function openPrintWindow(title, bodyHtml){
+  const w = window.open('', '_blank');
+  if(!w){ alert('Please allow pop-ups for this site to generate a PDF.'); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#182126}
+    h1{font-size:20px;margin:0 0 2px}
+    h2,h3{margin:18px 0 8px}
+    .meta{color:#555;font-size:12px;margin-bottom:16px}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th,td{border:1px solid #ccc;padding:6px 8px;font-size:12px;text-align:left}
+    th{background:#f0f0f0}
+    .cards{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+    .metric{border:1px solid #ccc;border-radius:6px;padding:8px 12px;min-width:120px}
+    .metric b{display:block;font-size:10px;color:#666}
+    .metric strong{font-size:16px}
+    .right{text-align:right}
+    @media print{ button{display:none} }
+  </style></head><body>
+    <h1>${esc(settings.businessName||'U-CHOICE LIQUOR')}</h1>
+    <div class="meta">${esc(title)} &nbsp;•&nbsp; Generated ${esc(new Date().toLocaleString())} by ${esc(currentUser?currentUser.username:'—')}</div>
+    ${bodyHtml}
+    <p class="meta" style="margin-top:24px">If the print dialog didn't open automatically, use your browser's Print (Ctrl/Cmd+P) and choose "Save as PDF".</p>
+  </body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ try{ w.print(); }catch(e){} }, 350);
+}
+function generateStockPDF(){
+  const rows = [...products].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))
+    .map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.size)}</td><td>KES ${Number(p.buyingPrice||0).toFixed(2)}</td><td>KES ${money(p.price)}</td><td>${qtyFmt(p.stock)}</td></tr>`).join('')
+    || '<tr><td colspan="5" class="meta">No products.</td></tr>';
+  const html = `<h2>Stock List</h2><table><thead><tr><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Stock</th></tr></thead><tbody>${rows}</tbody></table>`;
+  openPrintWindow('Stock Report', html);
+}
+// ---------------- Stock Level Report (admin only) ----------------
+// Shows what's actually reliable: current stock levels and stock value
+// for every product right now, plus how much of each moved (sold)
+// during the selected period. Stock is deducted at sale time regardless
+// of payment status, so ALL sales (including unpaid credit sales) count
+// toward "sold in period" here — this is about inventory movement, not
+// revenue.
+function updateStockPeriodLabel(){
+  const type=$('stockPeriodType').value, d=$('stockPeriodDate').value;
+  if(!d){ $('stockPeriodLabel').textContent='Select a date and period.'; return; }
+  const r=periodRange(type,d);
+  if(!r)return;
+  const names={daily:'Daily',weekly:'Weekly',monthly:'Monthly',yearly:'Yearly'};
+  $('stockPeriodLabel').textContent=`${names[type]} stock level report: ${r.start} to ${r.end}`;
+}
+function stockLevelPeriodData(){
+  const type=$('stockPeriodType').value, d=$('stockPeriodDate').value;
+  if(!d) return null;
+  const range=periodRange(type,d);
+  if(!range) return null;
+  const soldQty={};
+  sales.filter(s=>s.date>=range.start&&s.date<=range.end).forEach(s=>(s.items||[]).forEach(x=>{
+    const key=x.productId||((x.name||'')+'|'+(x.size||''));
+    soldQty[key]=(soldQty[key]||0)+(Number(x.qty)||0);
+  }));
+  const rows=[...products].map(p=>({
+    name:p.name, size:p.size, buyingPrice:Number(p.buyingPrice)||0, price:Number(p.price)||0,
+    currentStock:Number(p.stock)||0,
+    soldInPeriod:soldQty[p.id]||0,
+    stockValue:(Number(p.stock)||0)*(Number(p.buyingPrice)||0)
+  })).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),undefined,{sensitivity:'base'}));
+  return {rows, range};
+}
+function loadStockPeriodicReport(){
+  const found=stockLevelPeriodData();
+  if(!found) return alert('Choose a date for the analysis.');
+  const {rows}=found;
+  updateStockPeriodLabel();
+  const totalUnits=rows.reduce((a,r)=>a+r.currentStock,0);
+  const totalValue=rows.reduce((a,r)=>a+r.stockValue,0);
+  const totalSold=rows.reduce((a,r)=>a+r.soldInPeriod,0);
+  const lowStock=rows.filter(r=>r.currentStock<=5).length;
+  const summaryHtml=`<div class="cards">
+    <div class="metric"><b>PRODUCTS</b><strong>${rows.length}</strong></div>
+    <div class="metric"><b>UNITS IN STOCK</b><strong>${qtyFmt(totalUnits)}</strong></div>
+    <div class="metric"><b>STOCK VALUE</b><strong>KES ${money(totalValue)}</strong></div>
+    <div class="metric"><b>SOLD IN PERIOD</b><strong>${qtyFmt(totalSold)}</strong></div>
+    <div class="metric"><b>LOW STOCK</b><strong>${lowStock}</strong></div>
+  </div>`;
+  const rowsHtml=rows.length
+    ? `<table style="margin-top:12px"><thead><tr><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Sold in Period</th><th>Current Stock</th><th>Stock Value</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.size)}</td><td>KES ${r.buyingPrice.toFixed(2)}</td><td>KES ${money(r.price)}</td><td>${qtyFmt(r.soldInPeriod)}</td><td><span class="badge">${qtyFmt(r.currentStock)}</span></td><td>KES ${money(r.stockValue)}</td></tr>`).join('')}</tbody><tfoot><tr><th colspan="4" class="right">TOTAL</th><th>${qtyFmt(totalSold)}</th><th>${qtyFmt(totalUnits)}</th><th>KES ${money(totalValue)}</th></tr></tfoot></table>`
+    : '<p class="muted">No products found.</p>';
+  $('stockPeriodicBody').innerHTML=summaryHtml+rowsHtml;
+}
+function generateStockPeriodicPDF(){
+  const found=stockLevelPeriodData();
+  if(!found) return alert('Choose a date for the analysis first, then click "Analyze Period".');
+  const {rows, range}=found;
+  const totalUnits=rows.reduce((a,r)=>a+r.currentStock,0);
+  const totalValue=rows.reduce((a,r)=>a+r.stockValue,0);
+  const totalSold=rows.reduce((a,r)=>a+r.soldInPeriod,0);
+  const body = rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.size)}</td><td>KES ${r.buyingPrice.toFixed(2)}</td><td>KES ${money(r.price)}</td><td>${qtyFmt(r.soldInPeriod)}</td><td>${qtyFmt(r.currentStock)}</td><td>KES ${money(r.stockValue)}</td></tr>`).join('')
+    || '<tr><td colspan="7" class="meta">No products found.</td></tr>';
+  const html=`<h2>Stock Level Report: ${esc(range.start)} to ${esc(range.end)}</h2><p class="meta">Units in stock: ${qtyFmt(totalUnits)} • Stock value: KES ${money(totalValue)} • Sold in period: ${qtyFmt(totalSold)}</p><table><thead><tr><th>Product</th><th>Size</th><th>Buying Price</th><th>Selling Price</th><th>Sold in Period</th><th>Current Stock</th><th>Stock Value</th></tr></thead><tbody>${body}</tbody></table>`;
+  openPrintWindow('Stock Level Report', html);
+}
+function generateExpenditurePDF(){
+  const rows=[...expenditures].sort((a,b)=>b.date.localeCompare(a.date));
+  const body = rows.map(x=>`<tr><td>${esc(x.nature)}</td><td>${esc(x.date)}</td><td>KES ${money(x.amount)}</td></tr>`).join('') || '<tr><td colspan="3" class="meta">No expenditures.</td></tr>';
+  const total = expenditures.reduce((a,x)=>a+Number(x.amount||0),0);
+  const periodicHtml = ($('expenditurePeriodicBody')&&$('expenditurePeriodicBody').innerHTML.trim())
+    ? `<hr>${$('expenditurePeriodicBody').innerHTML}` : '';
+  const html = `<h2>All Expenditures</h2><table><thead><tr><th>Nature of Expenditure</th><th>Date</th><th>Amount</th></tr></thead><tbody>${body}</tbody></table><p><b>Total Expenditure: KES ${money(total)}</b></p>${periodicHtml}`;
+  openPrintWindow('Expenditure Report', html);
+}
+function generateReportsPDF(){
+  const isAdmin = currentUser && currentUser.role==='admin';
+  const reportBody = ($('reportBody')&&$('reportBody').innerHTML.trim()) || '<p class="meta">No day/period report generated yet — pick a date above and click "View Day" or "Analyze Period" first.</p>';
+  const cardsHtml = `<div class="cards">
+    <div class="metric"><b>TODAY</b><strong>${esc($('rToday').textContent)}</strong></div>
+    <div class="metric"><b>THIS MONTH</b><strong>${esc($('rMonth').textContent)}</strong></div>
+    <div class="metric"><b>TRANSACTIONS</b><strong>${esc($('rTx').textContent)}</strong></div>
+    <div class="metric"><b>LOW STOCK</b><strong>${esc($('rLow').textContent)}</strong></div>
+  </div>`;
+  const scopeNote = isAdmin
+    ? `<p class="meta">Full business report — all attendants.</p>`
+    : `<p class="meta">Showing sales recorded by you (${esc(currentUser.username)}) only.</p>`;
+  openPrintWindow('Sales Report', scopeNote + cardsHtml + reportBody);
+}
+function go(id){document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));const b=document.querySelector(`.nav button[onclick="go('${id}')"]`);if(b)b.classList.add('active');if(id==='stock'){renderStock();if(!$('stockPeriodDate').value)$('stockPeriodDate').value=today();updateStockPeriodLabel();}if(id==='history')renderHistory();if(id==='reports')renderReportCards();
+  if(id==='profit'){if(!$('profitPeriodDate').value)$('profitPeriodDate').value=today();updateProfitPeriodLabel()}if(id==='expenditure'){renderExpendituresMain();if(!$('expPeriodDate').value)$('expPeriodDate').value=today();updateExpPeriodLabel()}if(id==='pending'){if(!$('pendPeriodDate').value)$('pendPeriodDate').value=today();renderPending()}if(id==='users')renderUsers();if(id==='audit')loadAuditLog();}
+function loadSettings(){$('businessName').value=settings.businessName||'U-CHOICE LIQUOR'}
+async function saveBusinessSettings(){
+  const name=$('businessName').value.trim()||'U-CHOICE LIQUOR';
+  try{
+    const body=await apiFetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({businessName:name})});
+    settings=body.settings;
+    alert('Settings saved.');
+  }catch(err){ alert(err.message); }
+}
+function closeModal(){$('modal').classList.add('hidden')}
+
+// If a saved session token exists, try to resume it silently; otherwise
+// the person just sees the login form.
+tryAutoLogin();
+</script>
+</body></html>

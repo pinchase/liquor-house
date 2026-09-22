@@ -1,0 +1,8 @@
+node_modules/
+data.json
+data.json.tmp
+users.json
+users.json.tmp
+audit.json
+audit.json.tmp
+server.log

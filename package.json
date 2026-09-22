@@ -1,0 +1,12 @@
+{
+  "name": "uchoice-liquor-pos",
+  "version": "1.0.0",
+  "description": "U-Choice Liquor POS - Express backend + static frontend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
