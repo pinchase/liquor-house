@@ -1,767 +1,2991 @@
 // U-Choice Liquor POS — Backend server
-// - Serves the frontend (public/)
-// - Persists business data (products/sales/expenditures/etc.) in data.json
-// - Handles user accounts, login sessions, roles and per-section permissions
-//   in users.json, so an admin can create attendant accounts and restrict
-//   which parts of the POS each one can see.
+//
+// Production persistence:
+//   Browser → Express → Neon PostgreSQL
+//
+// JSON files are no longer used for live application data.
+// They are intentionally kept in the project directory as a backup
+// until the PostgreSQL deployment has been fully verified.
 
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
-
 const pool = require('./db');
 
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data.json');
-const USERS_FILE = path.join(__dirname, 'users.json');
-const AUDIT_FILE = path.join(__dirname, 'audit.json');
-const AUDIT_MAX_ENTRIES = 5000;
 
 const app = express();
+
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(require('path').join(__dirname, 'public')));
 
 // ---------------------------------------------------------------------
-// Generic JSON file persistence (used for both business data and users)
+// Helpers
 // ---------------------------------------------------------------------
-function readJSON(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    const raw = fs.readFileSync(file, 'utf8');
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (err) {
-    console.error('Failed to read', file, err);
-    return fallback;
-  }
-}
-
-const writeQueues = {};
-function writeJSON(file, value) {
-  const prev = writeQueues[file] || Promise.resolve();
-  const next = prev.then(
-    () =>
-      new Promise((resolve, reject) => {
-        const tmp = file + '.tmp';
-        fs.writeFile(tmp, JSON.stringify(value, null, 2), (err) => {
-          if (err) return reject(err);
-          fs.rename(tmp, file, (err2) => (err2 ? reject(err2) : resolve()));
-        });
-      })
-  );
-  writeQueues[file] = next;
-  return next;
-}
-
-// Safe read-modify-write: queues onto the same per-file chain as writeJSON
-// so two requests can never read the same stale copy and clobber each
-// other. `mutator` receives the freshly-read object, mutates it in place
-// (or returns a replacement), and whatever it returns is passed back to
-// the caller — while the (possibly mutated) object is what gets written.
-function mutateJSON(file, fallback, mutator) {
-  const prev = writeQueues[file] || Promise.resolve();
-  const result = prev.then(async () => {
-    const current = readJSON(file, typeof fallback === 'function' ? fallback() : fallback);
-    const returned = await mutator(current);
-    await new Promise((resolve, reject) => {
-      const tmp = file + '.tmp';
-      fs.writeFile(tmp, JSON.stringify(current, null, 2), (err) => {
-        if (err) return reject(err);
-        fs.rename(tmp, file, (err2) => (err2 ? reject(err2) : resolve()));
-      });
-    });
-    return returned;
-  });
-  // Keep the queue alive even if this mutation failed, so later requests
-  // aren't stuck behind a rejected promise forever.
-  writeQueues[file] = result.catch(() => {});
-  return result;
-}
 
 function genId(prefix) {
-  return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    return (
+        prefix +
+        '-' +
+        Date.now().toString(36) +
+        crypto.randomBytes(4).toString('hex')
+    );
 }
 
-// ---------------------------------------------------------------------
-// Users, passwords, permissions
-// ---------------------------------------------------------------------
-const ALL_TRUE = { sales: true, stock: true, reports: true, profit: true, expenditure: true, history: true, settings: true };
-const ALL_FALSE = { sales: false, stock: false, reports: false, profit: false, expenditure: false, history: false, settings: false };
+function makeSalt() {
+    return crypto.randomBytes(16).toString('hex');
+}
 
-function loadUsers() { return readJSON(USERS_FILE, []); }
-function saveUsers(users) { return writeJSON(USERS_FILE, users); }
+function hashPassword(password, salt) {
+    return crypto
+        .scryptSync(String(password), salt, 64)
+        .toString('hex');
+}
 
-function makeSalt() { return crypto.randomBytes(16).toString('hex'); }
-function hashPassword(password, salt) { return crypto.scryptSync(String(password), salt, 64).toString('hex'); }
 function verifyPassword(password, user) {
-  try {
-    const candidate = Buffer.from(hashPassword(password, user.salt), 'hex');
-    const actual = Buffer.from(user.passwordHash, 'hex');
-    return candidate.length === actual.length && crypto.timingSafeEqual(candidate, actual);
-  } catch {
-    return false;
-  }
+    try {
+        const candidate = Buffer.from(
+            hashPassword(password, user.salt),
+            'hex'
+        );
+
+        const actual = Buffer.from(user.password_hash, 'hex');
+
+        return (
+            candidate.length === actual.length &&
+            crypto.timingSafeEqual(candidate, actual)
+        );
+    } catch {
+        return false;
+    }
 }
-// Security-question answers are normalized (trimmed + lowercased) before
-// hashing, so "Blue" and " blue " both verify — same scrypt+salt scheme as
-// passwords, just on the normalized text.
-function normalizeAnswer(a) { return String(a || '').trim().toLowerCase(); }
+
+function normalizeAnswer(answer) {
+    return String(answer || '').trim().toLowerCase();
+}
+
 function verifySecurityAnswer(answer, user) {
-  if (!user.securityAnswerHash || !user.securityAnswerSalt) return false;
-  try {
-    const candidate = Buffer.from(hashPassword(normalizeAnswer(answer), user.securityAnswerSalt), 'hex');
-    const actual = Buffer.from(user.securityAnswerHash, 'hex');
-    return candidate.length === actual.length && crypto.timingSafeEqual(candidate, actual);
-  } catch {
-    return false;
-  }
+    if (
+        !user.security_answer_hash ||
+        !user.security_answer_salt
+    ) {
+        return false;
+    }
+
+    try {
+        const candidate = Buffer.from(
+            hashPassword(
+                normalizeAnswer(answer),
+                user.security_answer_salt
+            ),
+            'hex'
+        );
+
+        const actual = Buffer.from(
+            user.security_answer_hash,
+            'hex'
+        );
+
+        return (
+            candidate.length === actual.length &&
+            crypto.timingSafeEqual(candidate, actual)
+        );
+    } catch {
+        return false;
+    }
 }
 
-function ensureDefaultAdmin() {
-  const users = loadUsers();
-  if (users.length === 0) {
-    const salt = makeSalt();
-    users.push({
-      id: 'u-' + crypto.randomBytes(6).toString('hex'),
-      username: 'admin',
-      passwordHash: hashPassword('admin123', salt),
-      salt,
-      role: 'admin',
-      permissions: { ...ALL_TRUE },
-      createdAt: new Date().toISOString()
-    });
-    saveUsers(users);
-    console.log('No users found — created default admin account: username "admin", password "admin123". Please change this password after logging in.');
-  }
+function toNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
 }
-ensureDefaultAdmin();
 
 // ---------------------------------------------------------------------
-// Business data shape + seeding
+// Permissions
 // ---------------------------------------------------------------------
-function defaultData() {
-  return { products: [], sales: [], expenditures: [], settings: { businessName: 'U-CHOICE LIQUOR' } };
+
+const ALL_TRUE = {
+    sales: true,
+    stock: true,
+    reports: true,
+    profit: true,
+    expenditure: true,
+    history: true,
+    settings: true
+};
+
+const ALL_FALSE = {
+    sales: false,
+    stock: false,
+    reports: false,
+    profit: false,
+    expenditure: false,
+    history: false,
+    settings: false
+};
+
+function publicUser(user) {
+    return {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        permissions:
+            user.role === 'admin'
+                ? { ...ALL_TRUE }
+                : {
+                      ...ALL_FALSE,
+                      ...(user.permissions || {})
+                  },
+        securityQuestion:
+            user.security_question || null
+    };
 }
 
-const SEED_PRODUCTS = [{"name":"4TH STREET RED","size":"","buyingPrice":865,"price":1200,"stock":50},{"name":"4TH STREET WHITE","size":"","buyingPrice":865,"price":1200,"stock":50},{"name":"BAILEYS 375ML","size":"","buyingPrice":900,"price":1200,"stock":50},{"name":"BALOZI CAN","size":"","buyingPrice":201,"price":300,"stock":50},{"name":"BLUE ICE 250ML","size":"","buyingPrice":150,"price":200,"stock":50},{"name":"BOND 7 250ML","size":"","buyingPrice":420,"price":600,"stock":50},{"name":"CAPRICE RED","size":"","buyingPrice":885,"price":1200,"stock":50},{"name":"CAPRICE WHITE","size":"","buyingPrice":885,"price":1100,"stock":50},{"name":"CAPTAIN MUCK PIT 250ML","size":"","buyingPrice":394,"price":560,"stock":50},{"name":"CAPTAIN MUCK PIT 750ML","size":"","buyingPrice":1107,"price":1400,"stock":50},{"name":"CAPTAIN MORGAN 250ML","size":"","buyingPrice":344,"price":450,"stock":50},{"name":"CAPTAIN MORGAN 750ML","size":"","buyingPrice":942,"price":1300,"stock":50},{"name":"CELLAR RED WINE","size":"","buyingPrice":970,"price":1300,"stock":50},{"name":"CELLAR WHITE WINE","size":"","buyingPrice":970,"price":1300,"stock":50},{"name":"CHROME GIN 250ML","size":"","buyingPrice":210,"price":300,"stock":50},{"name":"CHROME GIN 750ML","size":"","buyingPrice":575,"price":950,"stock":50},{"name":"CHROME VODKA 250ML","size":"","buyingPrice":212,"price":300,"stock":50},{"name":"COUNTY 250ML","size":"","buyingPrice":235,"price":300,"stock":50},{"name":"COUNTY 750ML","size":"","buyingPrice":645,"price":950,"stock":50},{"name":"DALLAS BRANDY 250ML","size":"","buyingPrice":125,"price":200,"stock":50},{"name":"DROSTDY SWEET RED","size":"","buyingPrice":935,"price":1300,"stock":50},{"name":"DROSTDY WHITE","size":"","buyingPrice":935,"price":1300,"stock":50},{"name":"FOUR COUSINS","size":"","buyingPrice":875,"price":1200,"stock":50},{"name":"FAXE","size":"","buyingPrice":280,"price":350,"stock":50},{"name":"GUINNESS CAN","size":"","buyingPrice":216,"price":300,"stock":50},{"name":"KC GINGER 250ML","size":"","buyingPrice":259,"price":350,"stock":50},{"name":"KC GINGER 750ML","size":"","buyingPrice":702,"price":900,"stock":50},{"name":"KC PINEAPPL 250ML","size":"","buyingPrice":259,"price":350,"stock":50},{"name":"KC PINEAPPLE 750ML","size":"","buyingPrice":702,"price":900,"stock":50},{"name":"K.C SMOOTH 250ML","size":"","buyingPrice":259,"price":350,"stock":50},{"name":"KIBAO VODKA 250ML","size":"","buyingPrice":226,"price":300,"stock":50},{"name":"KIBAO VODKA 350ML","size":"","buyingPrice":343,"price":400,"stock":50},{"name":"KONYAGI 250ML","size":"","buyingPrice":235,"price":300,"stock":50},{"name":"KONYAGI 350ML","size":"","buyingPrice":510,"price":700,"stock":50},{"name":"KONYAGI 750ML","size":"","buyingPrice":670,"price":900,"stock":50},{"name":"MONSTER","size":"","buyingPrice":195,"price":350,"stock":50},{"name":"RED BULL","size":"","buyingPrice":185,"price":280,"stock":50},{"name":"LEMONADE","size":"","buyingPrice":40,"price":60,"stock":50},{"name":"PREDITOR","size":"","buyingPrice":55,"price":70,"stock":50},{"name":"SMIRNOFF GUARANA","size":"","buyingPrice":176,"price":250,"stock":50},{"name":"SMIRNOFF BLACK ICE","size":"","buyingPrice":176,"price":250,"stock":50},{"name":"SMIRNOFF PINEAPLE PUNCH","size":"","buyingPrice":176,"price":250,"stock":50},{"name":"SNAPP APPLE 330ML","size":"","buyingPrice":176,"price":250,"stock":50},{"name":"POWER PLAY","size":"","buyingPrice":55,"price":70,"stock":50},{"name":"V&A 250ML","size":"","buyingPrice":309,"price":400,"stock":50},{"name":"V&A 750ML","size":"","buyingPrice":803,"price":1200,"stock":50},{"name":"BLACK N WHITE 350ML","size":"","buyingPrice":593,"price":800,"stock":50},{"name":"BLACK N WHITE 750ML","size":"","buyingPrice":1155,"price":1400,"stock":50},{"name":"CASABUENA RED","size":"","buyingPrice":747,"price":1200,"stock":50},{"name":"CASABUENA WHITE","size":"","buyingPrice":747,"price":1200,"stock":50},{"name":"HUNTERS GIN 250ML","size":"","buyingPrice":437,"price":650,"stock":50},{"name":"HUNTERS GIN 750ML","size":"","buyingPrice":922,"price":1200,"stock":50},{"name":"HUNTERS DRY BOTTTLE","size":"","buyingPrice":202,"price":350,"stock":50},{"name":"GILBEYS 250ML","size":"","buyingPrice":416,"price":650,"stock":50},{"name":"GILBEYS 350ML","size":"","buyingPrice":602,"price":800,"stock":50},{"name":"GILBEYS 750ML","size":"","buyingPrice":1277,"price":1500,"stock":50},{"name":"RICHOT 250ML","size":"","buyingPrice":435,"price":650,"stock":50},{"name":"RICHOT350ML","size":"","buyingPrice":576,"price":800,"stock":50},{"name":"JINRO","size":"","buyingPrice":365,"price":500,"stock":50},{"name":"ORIJIN","size":"","buyingPrice":242,"price":350,"stock":50},{"name":"SMIRNOFF 250ML","size":"","buyingPrice":429,"price":650,"stock":50},{"name":"SMIRNOFF 350ML","size":"","buyingPrice":593,"price":800,"stock":50},{"name":"TRIPLE ACE 250ML","size":"","buyingPrice":203,"price":350,"stock":50},{"name":"TUSKER CIDER","size":"","buyingPrice":234,"price":350,"stock":50},{"name":"TUSKER LITE","size":"","buyingPrice":243,"price":350,"stock":50},{"name":"TUSKER CAN","size":"","buyingPrice":201,"price":300,"stock":50},{"name":"VICEROY 250ML","size":"","buyingPrice":437,"price":650,"stock":50},{"name":"VICEROY 350ML","size":"","buyingPrice":627,"price":800,"stock":50},{"name":"VICEROY 750ML","size":"","buyingPrice":1265,"price":1500,"stock":50},{"name":"GENERAL MIKINS 250ML","size":"","buyingPrice":220,"price":300,"stock":50},{"name":"GENERAL MIKINS 750ML","size":"","buyingPrice":635,"price":900,"stock":50},{"name":"J.MOVERS","size":"","buyingPrice":120,"price":200,"stock":50},{"name":"GRAYSON WHISKEY 250ML","size":"","buyingPrice":260,"price":400,"stock":50},{"name":"WHITE CAP","size":"","buyingPrice":216,"price":300,"stock":50},{"name":"MANYATTA","size":"","buyingPrice":242,"price":350,"stock":50},{"name":"NAPOLION 250ML","size":"","buyingPrice":225,"price":350,"stock":50}];
+// ---------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------
 
-function ensureSeedProducts() {
-  const data = readJSON(DATA_FILE, defaultData());
-  if (!data.products || !data.products.length) {
-    data.products = SEED_PRODUCTS.map((p) => ({ id: genId('p'), ...p, createdAt: new Date().toISOString(), addedBy: 'system' }));
-    data.sales = data.sales || [];
-    data.expenditures = data.expenditures || [];
-    data.settings = data.settings || { businessName: 'U-CHOICE LIQUOR' };
-    writeJSON(DATA_FILE, data);
-    console.log(`Seeded ${data.products.length} default products into data.json.`);
-  }
-}
-ensureSeedProducts();
+// Sessions intentionally remain in memory.
+// A Render restart logs users out, exactly like the previous version.
 
-// In-memory sessions: token -> { userId, createdAt }. Lost on server restart
-// (by design, to keep this simple) — users just log in again.
 const sessions = new Map();
+
 function createSession(userId) {
-  const token = crypto.randomBytes(24).toString('hex');
-  sessions.set(token, { userId, createdAt: Date.now() });
-  return token;
-}
-function publicUser(u) {
-  return {
-    id: u.id,
-    username: u.username,
-    role: u.role,
-    permissions: u.role === 'admin' ? { ...ALL_TRUE } : { ...ALL_FALSE, ...(u.permissions || {}) },
-    securityQuestion: u.securityQuestion || null
-  };
+    const token = crypto.randomBytes(24).toString('hex');
+
+    sessions.set(token, {
+        userId,
+        createdAt: Date.now()
+    });
+
+    return token;
 }
 
-function auth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  const session = token ? sessions.get(token) : null;
-  if (!session) return res.status(401).json({ error: 'Not authenticated' });
-  const user = loadUsers().find((u) => u.id === session.userId);
-  if (!user) {
-    sessions.delete(token);
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  req.user = user;
-  req.token = token;
-  next();
+function invalidateUserSessions(userId) {
+    for (const [token, session] of sessions) {
+        if (session.userId === userId) {
+            sessions.delete(token);
+        }
+    }
 }
+
+// ---------------------------------------------------------------------
+// Authentication middleware
+// ---------------------------------------------------------------------
+
+async function auth(req, res, next) {
+    const header = req.headers.authorization || '';
+
+    const token = header.startsWith('Bearer ')
+        ? header.slice(7)
+        : null;
+
+    const session = token ? sessions.get(token) : null;
+
+    if (!session) {
+        return res.status(401).json({
+            error: 'Not authenticated'
+        });
+    }
+
+    try {
+        const result = await pool.query(
+            `SELECT * FROM users WHERE id = $1`,
+            [session.userId]
+        );
+
+        if (!result.rows.length) {
+            sessions.delete(token);
+
+            return res.status(401).json({
+                error: 'Not authenticated'
+            });
+        }
+
+        req.user = result.rows[0];
+        req.token = token;
+
+        next();
+    } catch (err) {
+        console.error('Authentication lookup failed:', err);
+
+        return res.status(500).json({
+            error: 'Authentication service unavailable.'
+        });
+    }
+}
+
 function requireAdmin(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-  next();
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({
+            error: 'Admin access required'
+        });
+    }
+
+    next();
 }
-// Section-level permission gate for business-data endpoints. Admins always
-// pass. Anyone else must have at least one of the listed permissions on
-// their account (checked server-side, not just hidden in the UI).
+
 function requirePerm(...allowed) {
-  return (req, res, next) => {
-    if (req.user.role === 'admin') return next();
-    const perms = req.user.permissions || {};
-    if (allowed.some((p) => perms[p])) return next();
-    return res.status(403).json({ error: "You don't have permission to access this." });
-  };
+    return (req, res, next) => {
+        if (req.user.role === 'admin') {
+            return next();
+        }
+
+        const permissions = req.user.permissions || {};
+
+        if (allowed.some(permission => permissions[permission])) {
+            return next();
+        }
+
+        return res.status(403).json({
+            error: "You don't have permission to access this."
+        });
+    };
 }
 
 // ---------------------------------------------------------------------
-// Audit log — a system-wide, admin-only record of who did what and when.
-// Authentication and user-management events are logged automatically by
-// the server itself (so they can't be spoofed by the client). Business
-// actions (sales, stock, expenditure, settings) are logged via a small
-// POST endpoint that the frontend calls right after each action, with
-// the actor's identity always taken from their verified session — never
-// from the request body.
+// Audit logging
 // ---------------------------------------------------------------------
-function loadAudit() { return readJSON(AUDIT_FILE, []); }
-function saveAudit(entries) { return writeJSON(AUDIT_FILE, entries); }
 
-async function appendAudit({ username, role, category, action, details }) {
-  const entries = loadAudit();
-  const now = new Date();
-  entries.unshift({
-    id: 'a-' + crypto.randomBytes(6).toString('hex'),
-    timestamp: now.toISOString(),
-    date: now.toISOString().slice(0, 10),
-    time: now.toLocaleTimeString('en-GB'),
-    username: username || 'unknown',
-    role: role || '—',
-    category: category || 'General',
-    action: action || '',
-    details: details || ''
-  });
-  if (entries.length > AUDIT_MAX_ENTRIES) entries.length = AUDIT_MAX_ENTRIES;
-  await saveAudit(entries);
+async function appendAudit({
+    username,
+    role,
+    category,
+    action,
+    details
+}) {
+    const now = new Date();
+
+    const id = 'a-' + crypto.randomBytes(6).toString('hex');
+
+    await pool.query(
+        `
+        INSERT INTO audit_logs (
+            id,
+            timestamp,
+            date,
+            time,
+            username,
+            role,
+            category,
+            action,
+            details
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `,
+        [
+            id,
+            now.toISOString(),
+            now.toISOString().slice(0, 10),
+            now.toLocaleTimeString('en-GB'),
+            username || 'unknown',
+            role || '—',
+            category || 'General',
+            action || '',
+            details || ''
+        ]
+    );
+
+    // Keep the same maximum as the previous JSON implementation.
+    await pool.query(`
+        DELETE FROM audit_logs
+        WHERE id IN (
+            SELECT id
+            FROM audit_logs
+            ORDER BY timestamp DESC
+            OFFSET 5000
+        )
+    `);
 }
 
 // ---------------------------------------------------------------------
-// Auth routes
+// AUTH ROUTES
 // ---------------------------------------------------------------------
+
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
-  const user = loadUsers().find((u) => u.username.toLowerCase() === String(username).toLowerCase());
-  if (!user || !verifyPassword(password, user)) {
-    await appendAudit({ username: username || 'unknown', role: '—', category: 'Authentication', action: 'Login failed', details: 'Invalid username or password' });
-    return res.status(401).json({ error: 'Invalid username or password' });
-  }
-  const token = createSession(user.id);
-  await appendAudit({ username: user.username, role: user.role, category: 'Authentication', action: 'Login succeeded', details: '' });
-  res.json({ token, user: publicUser(user) });
+    const { username, password } = req.body || {};
+
+    if (!username || !password) {
+        return res.status(400).json({
+            error: 'Username and password required'
+        });
+    }
+
+    try {
+        const result = await pool.query(
+            `
+            SELECT *
+            FROM users
+            WHERE LOWER(username) = LOWER($1)
+            `,
+            [String(username)]
+        );
+
+        const user = result.rows[0];
+
+        if (!user || !verifyPassword(password, user)) {
+            await appendAudit({
+                username: username || 'unknown',
+                role: '—',
+                category: 'Authentication',
+                action: 'Login failed',
+                details: 'Invalid username or password'
+            });
+
+            return res.status(401).json({
+                error: 'Invalid username or password'
+            });
+        }
+
+        const token = createSession(user.id);
+
+        await appendAudit({
+            username: user.username,
+            role: user.role,
+            category: 'Authentication',
+            action: 'Login succeeded',
+            details: ''
+        });
+
+        res.json({
+            token,
+            user: publicUser(user)
+        });
+    } catch (err) {
+        console.error('Login failed:', err);
+
+        res.status(500).json({
+            error: 'Login service unavailable.'
+        });
+    }
 });
 
 app.post('/api/logout', auth, async (req, res) => {
-  sessions.delete(req.token);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Authentication', action: 'Logout', details: '' });
-  res.json({ ok: true });
+    sessions.delete(req.token);
+
+    await appendAudit({
+        username: req.user.username,
+        role: req.user.role,
+        category: 'Authentication',
+        action: 'Logout',
+        details: ''
+    });
+
+    res.json({ ok: true });
 });
 
 app.get('/api/me', auth, (req, res) => {
-  res.json({ user: publicUser(req.user) });
+    res.json({
+        user: publicUser(req.user)
+    });
 });
 
 app.post('/api/change-password', auth, async (req, res) => {
-  const { currentPassword, newPassword } = req.body || {};
-  if (!currentPassword || !newPassword || String(newPassword).length < 4) {
-    return res.status(400).json({ error: 'Provide your current password and a new password (min 4 characters).' });
-  }
-  if (!verifyPassword(currentPassword, req.user)) return res.status(401).json({ error: 'Current password is incorrect.' });
-  const users = loadUsers();
-  const u = users.find((x) => x.id === req.user.id);
-  u.salt = makeSalt();
-  u.passwordHash = hashPassword(newPassword, u.salt);
-  await saveUsers(users);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Account', action: 'Password changed', details: 'Self-service password change' });
-  res.json({ ok: true });
-});
+    const { currentPassword, newPassword } = req.body || {};
 
-// Lets a logged-in user set/update the recovery question used by "Forgot
-// password?" on the login screen. Requires the current password so an
-// unattended session can't silently take over recovery.
-app.post('/api/account/security-question', auth, async (req, res) => {
-  const { currentPassword, question, answer } = req.body || {};
-  if (!verifyPassword(currentPassword || '', req.user)) return res.status(401).json({ error: 'Current password is incorrect.' });
-  if (!question || !String(question).trim() || !answer || !normalizeAnswer(answer)) {
-    return res.status(400).json({ error: 'Choose a question and provide an answer.' });
-  }
-  const users = loadUsers();
-  const u = users.find((x) => x.id === req.user.id);
-  u.securityQuestion = String(question).trim();
-  u.securityAnswerSalt = makeSalt();
-  u.securityAnswerHash = hashPassword(normalizeAnswer(answer), u.securityAnswerSalt);
-  await saveUsers(users);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Account', action: 'Recovery question set', details: '' });
-  res.json({ ok: true });
+    if (
+        !currentPassword ||
+        !newPassword ||
+        String(newPassword).length < 4
+    ) {
+        return res.status(400).json({
+            error:
+                'Provide your current password and a new password (min 4 characters).'
+        });
+    }
+
+    if (!verifyPassword(currentPassword, req.user)) {
+        return res.status(401).json({
+            error: 'Current password is incorrect.'
+        });
+    }
+
+    const salt = makeSalt();
+
+    await pool.query(
+        `
+        UPDATE users
+        SET salt = $1,
+            password_hash = $2
+        WHERE id = $3
+        `,
+        [
+            salt,
+            hashPassword(newPassword, salt),
+            req.user.id
+        ]
+    );
+
+    await appendAudit({
+        username: req.user.username,
+        role: req.user.role,
+        category: 'Account',
+        action: 'Password changed',
+        details: 'Self-service password change'
+    });
+
+    res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------
-// Forgot password (self-service, no email required) — public routes.
-// Step 1: look up the recovery question for a username, if one was set.
-// Step 2: answer it correctly to set a brand-new password. Both steps
-// are rate-limited-in-spirit by requiring the exact answer (scrypt +
-// timing-safe compare) and by invalidating every existing session for
-// that account the moment a reset succeeds.
+// SECURITY QUESTION
 // ---------------------------------------------------------------------
-app.post('/api/forgot-password/question', (req, res) => {
-  const { username } = req.body || {};
-  const user = loadUsers().find((u) => u.username.toLowerCase() === String(username || '').toLowerCase());
-  if (!user || !user.securityQuestion || !user.securityAnswerHash) {
-    return res.json({ question: null });
-  }
-  res.json({ question: user.securityQuestion });
+
+app.post(
+    '/api/account/security-question',
+    auth,
+    async (req, res) => {
+        const { currentPassword, question, answer } =
+            req.body || {};
+
+        if (!verifyPassword(currentPassword || '', req.user)) {
+            return res.status(401).json({
+                error: 'Current password is incorrect.'
+            });
+        }
+
+        if (
+            !question ||
+            !String(question).trim() ||
+            !answer ||
+            !normalizeAnswer(answer)
+        ) {
+            return res.status(400).json({
+                error: 'Choose a question and provide an answer.'
+            });
+        }
+
+        const salt = makeSalt();
+
+        await pool.query(
+            `
+            UPDATE users
+            SET security_question = $1,
+                security_answer_salt = $2,
+                security_answer_hash = $3
+            WHERE id = $4
+            `,
+            [
+                String(question).trim(),
+                salt,
+                hashPassword(
+                    normalizeAnswer(answer),
+                    salt
+                ),
+                req.user.id
+            ]
+        );
+
+        await appendAudit({
+            username: req.user.username,
+            role: req.user.role,
+            category: 'Account',
+            action: 'Recovery question set',
+            details: ''
+        });
+
+        res.json({ ok: true });
+    }
+);
+
+// ---------------------------------------------------------------------
+// FORGOT PASSWORD
+// ---------------------------------------------------------------------
+
+app.post('/api/forgot-password/question', async (req, res) => {
+    const { username } = req.body || {};
+
+    try {
+        const result = await pool.query(
+            `
+            SELECT security_question
+            FROM users
+            WHERE LOWER(username) = LOWER($1)
+            `,
+            [String(username || '')]
+        );
+
+        const user = result.rows[0];
+
+        if (!user || !user.security_question) {
+            return res.json({
+                question: null
+            });
+        }
+
+        res.json({
+            question: user.security_question
+        });
+    } catch (err) {
+        console.error(
+            'Failed to retrieve security question:',
+            err
+        );
+
+        res.status(500).json({
+            error: 'Unable to retrieve security question.'
+        });
+    }
 });
 
 app.post('/api/forgot-password/reset', async (req, res) => {
-  const { username, answer, newPassword } = req.body || {};
-  if (!newPassword || String(newPassword).length < 4) {
-    return res.status(400).json({ error: 'Choose a new password (min 4 characters).' });
-  }
-  const users = loadUsers();
-  const user = users.find((u) => u.username.toLowerCase() === String(username || '').toLowerCase());
-  if (!user || !user.securityQuestion || !user.securityAnswerHash) {
-    return res.status(400).json({ error: 'No recovery question is set for this account. Ask an admin to reset your password.' });
-  }
-  if (!verifySecurityAnswer(answer, user)) {
-    await appendAudit({ username: user.username, role: user.role, category: 'Authentication', action: 'Password reset failed', details: 'Incorrect recovery answer' });
-    return res.status(401).json({ error: "That answer doesn't match our records." });
-  }
-  user.salt = makeSalt();
-  user.passwordHash = hashPassword(newPassword, user.salt);
-  await saveUsers(users);
-  for (const [token, s] of sessions) if (s.userId === user.id) sessions.delete(token);
-  await appendAudit({ username: user.username, role: user.role, category: 'Authentication', action: 'Password reset via security question', details: '' });
-  res.json({ ok: true });
-});
+    const { username, answer, newPassword } =
+        req.body || {};
 
-// ---------------------------------------------------------------------
-// User management — admin only
-// ---------------------------------------------------------------------
-app.get('/api/users', auth, requireAdmin, (req, res) => {
-  res.json({ users: loadUsers().map(publicUser) });
-});
-
-app.post('/api/users', auth, requireAdmin, async (req, res) => {
-  const { username, password, role, permissions } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'Username and password required.' });
-  if (String(password).length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters.' });
-  const users = loadUsers();
-  if (users.some((u) => u.username.toLowerCase() === String(username).toLowerCase())) {
-    return res.status(409).json({ error: 'That username is already taken.' });
-  }
-  const salt = makeSalt();
-  const newUser = {
-    id: 'u-' + crypto.randomBytes(6).toString('hex'),
-    username: String(username).trim(),
-    passwordHash: hashPassword(password, salt),
-    salt,
-    role: role === 'admin' ? 'admin' : 'attendant',
-    permissions: role === 'admin' ? { ...ALL_TRUE } : { ...ALL_FALSE, ...(permissions || {}) },
-    createdAt: new Date().toISOString()
-  };
-  users.push(newUser);
-  await saveUsers(users);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Users', action: 'User created', details: `Created "${newUser.username}" as ${newUser.role}` });
-  res.status(201).json({ user: publicUser(newUser) });
-});
-
-app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
-  const users = loadUsers();
-  const u = users.find((x) => x.id === req.params.id);
-  if (!u) return res.status(404).json({ error: 'User not found.' });
-  const { role, permissions, password } = req.body || {};
-  if (role) u.role = role === 'admin' ? 'admin' : 'attendant';
-  if (u.role === 'admin') {
-    u.permissions = { ...ALL_TRUE };
-  } else if (permissions) {
-    u.permissions = { ...ALL_FALSE, ...(u.permissions || {}), ...permissions };
-  }
-  if (password) {
-    if (String(password).length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters.' });
-    u.salt = makeSalt();
-    u.passwordHash = hashPassword(password, u.salt);
-  }
-  await saveUsers(users);
-  const changeParts = [];
-  if (role) changeParts.push(`role -> ${u.role}`);
-  if (permissions) changeParts.push('permissions updated');
-  if (password) changeParts.push('password reset');
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Users', action: 'User updated', details: `"${u.username}": ${changeParts.join(', ') || 'no changes'}` });
-  res.json({ user: publicUser(u) });
-});
-
-app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
-  const users = loadUsers();
-  const target = users.find((x) => x.id === req.params.id);
-  if (!target) return res.status(404).json({ error: 'User not found.' });
-  if (target.id === req.user.id) return res.status(400).json({ error: "You can't delete your own account while logged in." });
-  const remainingAdmins = users.filter((u) => u.role === 'admin' && u.id !== target.id);
-  if (target.role === 'admin' && remainingAdmins.length === 0) {
-    return res.status(400).json({ error: 'Cannot delete the last remaining admin account.' });
-  }
-  await saveUsers(users.filter((x) => x.id !== target.id));
-  for (const [token, s] of sessions) if (s.userId === target.id) sessions.delete(token);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Users', action: 'User deleted', details: `Deleted "${target.username}" (${target.role})` });
-  res.json({ ok: true });
-});
-
-// ---------------------------------------------------------------------
-// Products — read needs sales, stock, reports or profit access; writing
-// (adding a product/stock, deleting a product) needs stock access.
-// ---------------------------------------------------------------------
-app.get('/api/products', auth, requirePerm('sales', 'stock', 'reports', 'profit'), (req, res) => {
-  const data = readJSON(DATA_FILE, defaultData());
-  res.json({ products: data.products || [] });
-});
-
-app.post('/api/products', auth, requirePerm('stock'), async (req, res) => {
-  const { name, size, buyingPrice, price, stock } = req.body || {};
-  const bp = Number(buyingPrice), sp = Number(price), qty = Number(stock);
-  if (!name || !size || !Number.isFinite(bp) || bp < 0 || !Number.isFinite(sp) || sp < 0 || !Number.isFinite(qty) || qty < 0) {
-    return res.status(400).json({ error: 'Enter product name, size, buying price, selling price and stock.' });
-  }
-  try {
-    const result = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      const existing = data.products.find(
-        (p) => p.name.toLowerCase() === String(name).toLowerCase() && p.size.toLowerCase() === String(size).toLowerCase()
-      );
-      if (existing) {
-        existing.buyingPrice = bp;
-        existing.price = Math.round(sp / 5) * 5;
-        existing.stock = Number(existing.stock) + qty;
-        return { product: existing, merged: true };
-      }
-      const np = { id: genId('p'), name: String(name).trim(), size: String(size).trim(), buyingPrice: bp, price: Math.round(sp / 5) * 5, stock: qty, createdAt: new Date().toISOString(), addedBy: req.user.username };
-      data.products.push(np);
-      return { product: np, merged: false };
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Stock', action: result.merged ? 'Stock added' : 'Product added', details: `${result.product.name} ${result.product.size}`.trim() });
-    res.status(201).json(result);
-  } catch (err) {
-    console.error('Failed to save product:', err);
-    res.status(500).json({ error: 'Failed to save product.' });
-  }
-});
-
-// Full edit of an existing product (size, buying price, selling price,
-// stock quantity) — admin only. Unlike add-stock (which increments the
-// existing quantity), this sets the fields directly to whatever the
-// admin enters.
-app.put('/api/products/:id', auth, requireAdmin, async (req, res) => {
-  const { size, buyingPrice, price, stock } = req.body || {};
-  const bp = Number(buyingPrice), sp = Number(price), qty = Number(stock);
-  if (!size || !Number.isFinite(bp) || bp < 0 || !Number.isFinite(sp) || sp < 0 || !Number.isFinite(qty) || qty < 0) {
-    return res.status(400).json({ error: 'Enter a valid size, buying price, selling price and stock.' });
-  }
-  try {
-    const result = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      const p = data.products.find((x) => x.id === req.params.id);
-      if (!p) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
-      p.size = String(size).trim();
-      p.buyingPrice = bp;
-      p.price = Math.round(sp / 5) * 5;
-      p.stock = qty;
-      return p;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Stock', action: 'Stock edited', details: `${result.name} ${result.size}`.trim() });
-    res.json({ product: result });
-  } catch (err) {
-    if (err.status === 404) return res.status(404).json({ error: 'Product not found.' });
-    console.error('Failed to edit product:', err);
-    res.status(500).json({ error: 'Failed to edit product.' });
-  }
-});
-
-app.put('/api/products/:id/add-stock', auth, requirePerm('stock'), async (req, res) => {
-  const n = Number((req.body || {}).quantity);
-  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'Enter a quantity greater than 0.' });
-  try {
-    const result = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      const p = data.products.find((x) => x.id === req.params.id);
-      if (!p) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
-      p.stock = Number(p.stock) + n;
-      return p;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Stock', action: 'Stock added', details: `${result.name} ${result.size}: +${n} (now ${result.stock})`.trim() });
-    res.json({ product: result });
-  } catch (err) {
-    if (err.status === 404) return res.status(404).json({ error: 'Product not found.' });
-    console.error('Failed to add stock:', err);
-    res.status(500).json({ error: 'Failed to add stock.' });
-  }
-});
-
-app.delete('/api/products/:id', auth, requirePerm('stock'), async (req, res) => {
-  try {
-    const result = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      const p = data.products.find((x) => x.id === req.params.id);
-      if (!p) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
-      data.products = data.products.filter((x) => x.id !== req.params.id);
-      return p;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Stock', action: 'Product deleted', details: `${result.name} ${result.size}`.trim() });
-    res.json({ ok: true });
-  } catch (err) {
-    if (err.status === 404) return res.status(404).json({ error: 'Product not found.' });
-    console.error('Failed to delete product:', err);
-    res.status(500).json({ error: 'Failed to delete product.' });
-  }
-});
-
-// ---------------------------------------------------------------------
-// Sales — reading needs sales, reports, profit or history access;
-// completing a sale needs sales access; deleting needs history access.
-// Stock validation and decrementing happens here, atomically, so the
-// server is always the source of truth for whether a sale is valid.
-// ---------------------------------------------------------------------
-app.get('/api/sales', auth, requirePerm('sales', 'reports', 'profit', 'history'), (req, res) => {
-  const data = readJSON(DATA_FILE, defaultData());
-  res.json({ sales: data.sales || [] });
-});
-
-app.post('/api/sales', auth, requirePerm('sales'), async (req, res) => {
-  const { items, payment, paymentStatus, amountPaid, customerName, customerPhone, dueDate } = req.body || {};
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Cart is empty.' });
-  try {
-    const sale = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      data.sales = data.sales || [];
-      for (const it of items) {
-        const p = data.products.find((x) => x.id === it.productId);
-        const qty = Number(it.qty);
-        if (!p || !Number.isFinite(qty) || qty <= 0) throw Object.assign(new Error('BAD_ITEM'), { status: 400 });
-        if (Number(p.stock) + 1e-9 < qty) throw Object.assign(new Error('Not enough stock for ' + p.name + '.'), { status: 409 });
-      }
-      const saleItems = [];
-      let total = 0;
-      for (const it of items) {
-        const p = data.products.find((x) => x.id === it.productId);
-        const qty = Number(it.qty);
-        p.stock = Math.max(0, Number(p.stock) - qty);
-        total += Number(p.price) * qty;
-        saleItems.push({ productId: p.id, name: p.name, size: p.size, price: Number(p.price), buyingPrice: Number(p.buyingPrice) || 0, qty });
-      }
-      // A sale is "pending" (sold on credit) when the client explicitly asks
-      // for it and the amount paid now is less than the total. Any deposit
-      // paid at the time of sale is recorded as the first payment entry.
-      const requestedPending = paymentStatus === 'pending';
-      let status = requestedPending ? 'pending' : 'paid';
-      let paidNow = status === 'pending' ? Number(amountPaid) : total;
-      if (!Number.isFinite(paidNow) || paidNow < 0) paidNow = 0;
-      if (paidNow > total) paidNow = total;
-      if (paidNow + 1e-9 >= total) status = 'paid';
-      const now = new Date();
-      const s = {
-        id: genId('s'), date: now.toISOString().slice(0, 10), time: now.toLocaleTimeString(),
-        total, payment: payment || 'Cash', attendant: req.user.username, attendantId: req.user.id,
-        items: saleItems, createdAt: now.toISOString(),
-        paymentStatus: status, amountPaid: paidNow, balance: Math.max(0, total - paidNow),
-        customerName: requestedPending ? String(customerName || '').trim() : '',
-        customerPhone: requestedPending ? String(customerPhone || '').trim() : '',
-        dueDate: requestedPending ? String(dueDate || '').trim() : '',
-        payments: paidNow > 0 ? [{ date: now.toISOString().slice(0, 10), time: now.toLocaleTimeString(), amount: paidNow, by: req.user.username }] : []
-      };
-      data.sales.unshift(s);
-      return s;
-    });
-    const itemSummary = sale.items.map((x) => `${x.name} x${x.qty}`).join(', ');
-    const pendingNote = sale.paymentStatus === 'pending' ? ` — PENDING balance KES ${sale.balance.toFixed(2)}${sale.customerName ? ' (' + sale.customerName + ')' : ''}` : '';
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Sales', action: sale.paymentStatus === 'pending' ? 'Sale completed (pending payment)' : 'Sale completed', details: `KES ${sale.total.toFixed(2)} (${sale.payment}) — ${itemSummary}${pendingNote}` });
-    res.status(201).json({ sale });
-  } catch (err) {
-    if (err.status === 400) return res.status(400).json({ error: 'Invalid item in cart.' });
-    if (err.status === 409) return res.status(409).json({ error: err.message });
-    console.error('Failed to complete sale:', err);
-    res.status(500).json({ error: 'Failed to complete sale.' });
-  }
-});
-
-// Record a payment against a pending (credit) sale. Applies at most the
-// remaining balance, appends to the sale's payment history, and flips it
-// back to "paid" once the balance reaches zero.
-app.put('/api/sales/:id/pay', auth, requirePerm('sales'), async (req, res) => {
-  const amount = Number((req.body || {}).amount);
-  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Enter a payment amount greater than 0.' });
-  try {
-    const result = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.sales = data.sales || [];
-      const s = data.sales.find((x) => x.id === req.params.id);
-      if (!s) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
-      const currentBalance = s.balance != null ? Number(s.balance) : Math.max(0, Number(s.total) - Number(s.amountPaid || 0));
-      if (currentBalance <= 0.005) throw Object.assign(new Error('ALREADY_PAID'), { status: 400 });
-      const applied = Math.min(amount, currentBalance);
-      const now = new Date();
-      s.amountPaid = Number(s.amountPaid || 0) + applied;
-      s.balance = Math.max(0, Number(s.total) - s.amountPaid);
-      s.payments = s.payments || [];
-      s.payments.push({ date: now.toISOString().slice(0, 10), time: now.toLocaleTimeString(), amount: applied, by: req.user.username });
-      s.paymentStatus = s.balance <= 0.005 ? 'paid' : 'pending';
-      return s;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Sales', action: 'Pending payment collected', details: `KES ${amount.toFixed(2)} towards ${result.customerName || 'a credit sale'} from ${result.date} — balance now KES ${result.balance.toFixed(2)}` });
-    res.json({ sale: result });
-  } catch (err) {
-    if (err.status === 404) return res.status(404).json({ error: 'Sale not found.' });
-    if (err.status === 400) return res.status(400).json({ error: 'This sale is already fully paid.' });
-    console.error('Failed to record payment:', err);
-    res.status(500).json({ error: 'Failed to record payment.' });
-  }
-});
-
-app.delete('/api/sales/:id', auth, requireAdmin, async (req, res) => {
-  try {
-    const deleted = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.sales = data.sales || [];
-      data.products = data.products || [];
-      const found = data.sales.find((s) => s.id === req.params.id) || null;
-      if (found) {
-        for (const item of found.items || []) {
-          const p = data.products.find((x) => x.id === item.productId);
-          if (p) p.stock = Number(p.stock) + Number(item.qty || 0);
-        }
-      }
-      data.sales = data.sales.filter((s) => s.id !== req.params.id);
-      return found;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Sales', action: 'Sale deleted', details: deleted ? `KES ${Number(deleted.total).toFixed(2)} sale from ${deleted.date} ${deleted.time} — stock restored` : req.params.id });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to delete sale:', err);
-    res.status(500).json({ error: 'Failed to delete sale.' });
-  }
-});
-
-app.delete('/api/sales', auth, requireAdmin, async (req, res) => {
-  try {
-    await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.products = data.products || [];
-      (data.sales || []).forEach((s) => {
-        (s.items || []).forEach((item) => {
-          const p = data.products.find((x) => x.id === item.productId);
-          if (p) p.stock = Number(p.stock) + Number(item.qty || 0);
+    if (!newPassword || String(newPassword).length < 4) {
+        return res.status(400).json({
+            error: 'Choose a new password (min 4 characters).'
         });
-      });
-      data.sales = [];
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Sales', action: 'Sales history cleared', details: 'All sales removed and their stock restored' });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to clear sales history:', err);
-    res.status(500).json({ error: 'Failed to clear sales history.' });
-  }
+    }
+
+    try {
+        const result = await pool.query(
+            `
+            SELECT *
+            FROM users
+            WHERE LOWER(username) = LOWER($1)
+            `,
+            [String(username || '')]
+        );
+
+        const user = result.rows[0];
+
+        if (
+            !user ||
+            !user.security_question ||
+            !user.security_answer_hash
+        ) {
+            return res.status(400).json({
+                error:
+                    'No recovery question is set for this account. Ask an admin to reset your password.'
+            });
+        }
+
+        if (!verifySecurityAnswer(answer, user)) {
+            await appendAudit({
+                username: user.username,
+                role: user.role,
+                category: 'Authentication',
+                action: 'Password reset failed',
+                details: 'Incorrect recovery answer'
+            });
+
+            return res.status(401).json({
+                error:
+                    "That answer doesn't match our records."
+            });
+        }
+
+        const salt = makeSalt();
+
+        await pool.query(
+            `
+            UPDATE users
+            SET salt = $1,
+                password_hash = $2
+            WHERE id = $3
+            `,
+            [
+                salt,
+                hashPassword(newPassword, salt),
+                user.id
+            ]
+        );
+
+        invalidateUserSessions(user.id);
+
+        await appendAudit({
+            username: user.username,
+            role: user.role,
+            category: 'Authentication',
+            action:
+                'Password reset via security question',
+            details: ''
+        });
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Password reset failed:', err);
+
+        res.status(500).json({
+            error: 'Password reset failed.'
+        });
+    }
 });
 
 // ---------------------------------------------------------------------
-// Expenditures — requires expenditure access for everything.
+// USER MANAGEMENT
 // ---------------------------------------------------------------------
-app.get('/api/expenditures', auth, requirePerm('expenditure'), (req, res) => {
-  const data = readJSON(DATA_FILE, defaultData());
-  res.json({ expenditures: data.expenditures || [] });
-});
 
-app.post('/api/expenditures', auth, requirePerm('expenditure'), async (req, res) => {
-  const { nature, date, amount } = req.body || {};
-  const amt = Number(amount);
-  if (!nature || !date || !Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Enter nature, date and amount.' });
-  try {
-    const entry = { id: genId('e'), nature: String(nature).trim(), date, amount: amt };
-    await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.expenditures = data.expenditures || [];
-      data.expenditures.unshift(entry);
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Expenditure', action: 'Expenditure added', details: `${entry.nature}: KES ${amt.toFixed(2)} (${date})` });
-    res.status(201).json({ expenditure: entry });
-  } catch (err) {
-    console.error('Failed to add expenditure:', err);
-    res.status(500).json({ error: 'Failed to add expenditure.' });
-  }
-});
+app.get(
+    '/api/users',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        try {
+            const result = await pool.query(`
+                SELECT *
+                FROM users
+                ORDER BY username ASC
+            `);
 
-app.delete('/api/expenditures/:id', auth, requirePerm('expenditure'), async (req, res) => {
-  try {
-    const deleted = await mutateJSON(DATA_FILE, defaultData, (data) => {
-      data.expenditures = data.expenditures || [];
-      const found = data.expenditures.find((e) => e.id === req.params.id) || null;
-      data.expenditures = data.expenditures.filter((e) => e.id !== req.params.id);
-      return found;
-    });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Expenditure', action: 'Expenditure deleted', details: deleted ? `${deleted.nature}: KES ${Number(deleted.amount).toFixed(2)} (${deleted.date})` : req.params.id });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to delete expenditure:', err);
-    res.status(500).json({ error: 'Failed to delete expenditure.' });
-  }
-});
+            res.json({
+                users: result.rows.map(publicUser)
+            });
+        } catch (err) {
+            console.error('Failed to load users:', err);
 
-app.delete('/api/expenditures', auth, requirePerm('expenditure'), async (req, res) => {
-  try {
-    await mutateJSON(DATA_FILE, defaultData, (data) => { data.expenditures = []; });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Expenditure', action: 'All expenditures cleared', details: '' });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to clear expenditures:', err);
-    res.status(500).json({ error: 'Failed to clear expenditures.' });
-  }
+            res.status(500).json({
+                error: 'Failed to load users.'
+            });
+        }
+    }
+);
+
+app.post(
+    '/api/users',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        const {
+            username,
+            password,
+            role,
+            permissions
+        } = req.body || {};
+
+        if (!username || !password) {
+            return res.status(400).json({
+                error:
+                    'Username and password required.'
+            });
+        }
+
+        if (String(password).length < 4) {
+            return res.status(400).json({
+                error:
+                    'Password must be at least 4 characters.'
+            });
+        }
+
+        try {
+            const existing = await pool.query(
+                `
+                SELECT id
+                FROM users
+                WHERE LOWER(username) = LOWER($1)
+                `,
+                [String(username).trim()]
+            );
+
+            if (existing.rows.length) {
+                return res.status(409).json({
+                    error:
+                        'That username is already taken.'
+                });
+            }
+
+            const id =
+                'u-' +
+                crypto.randomBytes(6).toString('hex');
+
+            const salt = makeSalt();
+
+            const userRole =
+                role === 'admin'
+                    ? 'admin'
+                    : 'attendant';
+
+            const userPermissions =
+                userRole === 'admin'
+                    ? ALL_TRUE
+                    : {
+                          ...ALL_FALSE,
+                          ...(permissions || {})
+                      };
+
+            const createdAt = new Date().toISOString();
+
+            await pool.query(
+                `
+                INSERT INTO users (
+                    id,
+                    username,
+                    password_hash,
+                    salt,
+                    role,
+                    permissions,
+                    created_at
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                `,
+                [
+                    id,
+                    String(username).trim(),
+                    hashPassword(password, salt),
+                    salt,
+                    userRole,
+                    JSON.stringify(userPermissions),
+                    createdAt
+                ]
+            );
+
+            const createdUser = {
+                id,
+                username: String(username).trim(),
+                role: userRole,
+                permissions: userPermissions,
+                security_question: null
+            };
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Users',
+                action: 'User created',
+                details:
+                    `Created "${createdUser.username}" as ${createdUser.role}`
+            });
+
+            res.status(201).json({
+                user: publicUser(createdUser)
+            });
+        } catch (err) {
+            console.error('Failed to create user:', err);
+
+            res.status(500).json({
+                error: 'Failed to create user.'
+            });
+        }
+    }
+);
+
+app.put(
+    '/api/users/:id',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        const {
+            role,
+            permissions,
+            password
+        } = req.body || {};
+
+        try {
+            const result = await pool.query(
+                `SELECT * FROM users WHERE id = $1`,
+                [req.params.id]
+            );
+
+            const user = result.rows[0];
+
+            if (!user) {
+                return res.status(404).json({
+                    error: 'User not found.'
+                });
+            }
+
+            const newRole =
+                role === undefined
+                    ? user.role
+                    : role === 'admin'
+                    ? 'admin'
+                    : 'attendant';
+
+            let newPermissions =
+                user.permissions || {};
+
+            if (newRole === 'admin') {
+                newPermissions = {
+                    ...ALL_TRUE
+                };
+            } else if (permissions) {
+                newPermissions = {
+                    ...ALL_FALSE,
+                    ...(user.permissions || {}),
+                    ...permissions
+                };
+            }
+
+            let newSalt = user.salt;
+            let newHash = user.password_hash;
+
+            if (password) {
+                if (String(password).length < 4) {
+                    return res.status(400).json({
+                        error:
+                            'Password must be at least 4 characters.'
+                    });
+                }
+
+                newSalt = makeSalt();
+                newHash = hashPassword(
+                    password,
+                    newSalt
+                );
+            }
+
+            await pool.query(
+                `
+                UPDATE users
+                SET role = $1,
+                    permissions = $2,
+                    salt = $3,
+                    password_hash = $4
+                WHERE id = $5
+                `,
+                [
+                    newRole,
+                    JSON.stringify(newPermissions),
+                    newSalt,
+                    newHash,
+                    user.id
+                ]
+            );
+
+            if (password) {
+                invalidateUserSessions(user.id);
+            }
+
+            const changeParts = [];
+
+            if (role) {
+                changeParts.push(
+                    `role -> ${newRole}`
+                );
+            }
+
+            if (permissions) {
+                changeParts.push(
+                    'permissions updated'
+                );
+            }
+
+            if (password) {
+                changeParts.push(
+                    'password reset'
+                );
+            }
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Users',
+                action: 'User updated',
+                details:
+                    `"${user.username}": ${
+                        changeParts.join(', ') ||
+                        'no changes'
+                    }`
+            });
+
+            const updatedUser = {
+                ...user,
+                role: newRole,
+                permissions: newPermissions,
+                salt: newSalt,
+                password_hash: newHash
+            };
+
+            res.json({
+                user: publicUser(updatedUser)
+            });
+        } catch (err) {
+            console.error('Failed to update user:', err);
+
+            res.status(500).json({
+                error: 'Failed to update user.'
+            });
+        }
+    }
+);
+
+app.delete(
+    '/api/users/:id',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        try {
+            const result = await pool.query(
+                `SELECT * FROM users WHERE id = $1`,
+                [req.params.id]
+            );
+
+            const target = result.rows[0];
+
+            if (!target) {
+                return res.status(404).json({
+                    error: 'User not found.'
+                });
+            }
+
+            if (target.id === req.user.id) {
+                return res.status(400).json({
+                    error:
+                        "You can't delete your own account while logged in."
+                });
+            }
+
+            const admins = await pool.query(
+                `
+                SELECT COUNT(*) AS count
+                FROM users
+                WHERE role = 'admin'
+                AND id <> $1
+                `,
+                [target.id]
+            );
+
+            if (
+                target.role === 'admin' &&
+                Number(admins.rows[0].count) === 0
+            ) {
+                return res.status(400).json({
+                    error:
+                        'Cannot delete the last remaining admin account.'
+                });
+            }
+
+            await pool.query(
+                `DELETE FROM users WHERE id = $1`,
+                [target.id]
+            );
+
+            invalidateUserSessions(target.id);
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Users',
+                action: 'User deleted',
+                details:
+                    `Deleted "${target.username}" (${target.role})`
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('Failed to delete user:', err);
+
+            res.status(500).json({
+                error: 'Failed to delete user.'
+            });
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// PRODUCTS
+// ---------------------------------------------------------------------
+
+function mapProduct(row) {
+    return {
+        id: row.id,
+        name: row.name,
+        size: row.size,
+        buyingPrice: Number(row.buying_price),
+        price: Number(row.price),
+        stock: Number(row.stock),
+        createdAt: row.created_at,
+        addedBy: row.added_by
+    };
+}
+
+app.get(
+    '/api/products',
+    auth,
+    requirePerm(
+        'sales',
+        'stock',
+        'reports',
+        'profit'
+    ),
+    async (req, res) => {
+        try {
+            const result = await pool.query(`
+                SELECT *
+                FROM products
+                ORDER BY created_at ASC
+            `);
+
+            res.json({
+                products: result.rows.map(mapProduct)
+            });
+        } catch (err) {
+            console.error('Failed to load products:', err);
+
+            res.status(500).json({
+                error: 'Failed to load products.'
+            });
+        }
+    }
+);
+
+app.post(
+    '/api/products',
+    auth,
+    requirePerm('stock'),
+    async (req, res) => {
+        const {
+            name,
+            size,
+            buyingPrice,
+            price,
+            stock
+        } = req.body || {};
+
+        const bp = Number(buyingPrice);
+        const sp = Number(price);
+        const qty = Number(stock);
+
+        if (
+            !name ||
+            !size ||
+            !Number.isFinite(bp) ||
+            bp < 0 ||
+            !Number.isFinite(sp) ||
+            sp < 0 ||
+            !Number.isFinite(qty) ||
+            qty < 0
+        ) {
+            return res.status(400).json({
+                error:
+                    'Enter product name, size, buying price, selling price and stock.'
+            });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const existingResult = await client.query(
+                `
+                SELECT *
+                FROM products
+                WHERE LOWER(name) = LOWER($1)
+                AND LOWER(size) = LOWER($2)
+                FOR UPDATE
+                `,
+                [
+                    String(name).trim(),
+                    String(size).trim()
+                ]
+            );
+
+            let product;
+            let merged;
+
+            if (existingResult.rows.length) {
+                const row = existingResult.rows[0];
+
+                const newPrice =
+                    Math.round(sp / 5) * 5;
+
+                const newStock =
+                    Number(row.stock) + qty;
+
+                const updated = await client.query(
+                    `
+                    UPDATE products
+                    SET buying_price = $1,
+                        price = $2,
+                        stock = $3
+                    WHERE id = $4
+                    RETURNING *
+                    `,
+                    [
+                        bp,
+                        newPrice,
+                        newStock,
+                        row.id
+                    ]
+                );
+
+                product = mapProduct(
+                    updated.rows[0]
+                );
+                merged = true;
+
+                await client.query(
+                    `
+                    INSERT INTO stock_activities (
+                        id,
+                        date,
+                        time,
+                        attendant,
+                        action,
+                        product_id,
+                        product,
+                        size,
+                        quantity,
+                        stock_after
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    `,
+                    [
+                        genId('sa'),
+                        new Date()
+                            .toISOString()
+                            .slice(0, 10),
+                        new Date().toLocaleTimeString(),
+                        req.user.username,
+                        'STOCK ADDED',
+                        product.id,
+                        product.name,
+                        product.size,
+                        qty,
+                        product.stock
+                    ]
+                );
+            } else {
+                const id = genId('p');
+                const createdAt =
+                    new Date().toISOString();
+
+                const inserted = await client.query(
+                    `
+                    INSERT INTO products (
+                        id,
+                        name,
+                        size,
+                        buying_price,
+                        price,
+                        stock,
+                        created_at,
+                        added_by
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    RETURNING *
+                    `,
+                    [
+                        id,
+                        String(name).trim(),
+                        String(size).trim(),
+                        bp,
+                        Math.round(sp / 5) * 5,
+                        qty,
+                        createdAt,
+                        req.user.username
+                    ]
+                );
+
+                product = mapProduct(
+                    inserted.rows[0]
+                );
+                merged = false;
+
+                await client.query(
+                    `
+                    INSERT INTO stock_activities (
+                        id,
+                        date,
+                        time,
+                        attendant,
+                        action,
+                        product_id,
+                        product,
+                        size,
+                        quantity,
+                        stock_after
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    `,
+                    [
+                        genId('sa'),
+                        createdAt.slice(0, 10),
+                        new Date().toLocaleTimeString(),
+                        req.user.username,
+                        'PRODUCT ADDED',
+                        product.id,
+                        product.name,
+                        product.size,
+                        qty,
+                        product.stock
+                    ]
+                );
+            }
+
+            await client.query('COMMIT');
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Stock',
+                action: merged
+                    ? 'Stock added'
+                    : 'Product added',
+                details:
+                    `${product.name} ${product.size}`.trim()
+            });
+
+            res.status(201).json({
+                product,
+                merged
+            });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            console.error(
+                'Failed to save product:',
+                err
+            );
+
+            res.status(500).json({
+                error: 'Failed to save product.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+app.put(
+    '/api/products/:id',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        const {
+            size,
+            buyingPrice,
+            price,
+            stock
+        } = req.body || {};
+
+        const bp = Number(buyingPrice);
+        const sp = Number(price);
+        const qty = Number(stock);
+
+        if (
+            !size ||
+            !Number.isFinite(bp) ||
+            bp < 0 ||
+            !Number.isFinite(sp) ||
+            sp < 0 ||
+            !Number.isFinite(qty) ||
+            qty < 0
+        ) {
+            return res.status(400).json({
+                error:
+                    'Enter a valid size, buying price, selling price and stock.'
+            });
+        }
+
+        try {
+            const result = await pool.query(
+                `
+                UPDATE products
+                SET size = $1,
+                    buying_price = $2,
+                    price = $3,
+                    stock = $4
+                WHERE id = $5
+                RETURNING *
+                `,
+                [
+                    String(size).trim(),
+                    bp,
+                    Math.round(sp / 5) * 5,
+                    qty,
+                    req.params.id
+                ]
+            );
+
+            if (!result.rows.length) {
+                return res.status(404).json({
+                    error: 'Product not found.'
+                });
+            }
+
+            const product = mapProduct(
+                result.rows[0]
+            );
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Stock',
+                action: 'Stock edited',
+                details:
+                    `${product.name} ${product.size}`.trim()
+            });
+
+            res.json({ product });
+        } catch (err) {
+            console.error(
+                'Failed to edit product:',
+                err
+            );
+
+            res.status(500).json({
+                error: 'Failed to edit product.'
+            });
+        }
+    }
+);
+
+app.put(
+    '/api/products/:id/add-stock',
+    auth,
+    requirePerm('stock'),
+    async (req, res) => {
+        const quantity = Number(
+            (req.body || {}).quantity
+        );
+
+        if (
+            !Number.isFinite(quantity) ||
+            quantity <= 0
+        ) {
+            return res.status(400).json({
+                error:
+                    'Enter a quantity greater than 0.'
+            });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const result = await client.query(
+                `
+                SELECT *
+                FROM products
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [req.params.id]
+            );
+
+            if (!result.rows.length) {
+                await client.query('ROLLBACK');
+
+                return res.status(404).json({
+                    error: 'Product not found.'
+                });
+            }
+
+            const current = result.rows[0];
+
+            const newStock =
+                Number(current.stock) + quantity;
+
+            const updated = await client.query(
+                `
+                UPDATE products
+                SET stock = $1
+                WHERE id = $2
+                RETURNING *
+                `,
+                [
+                    newStock,
+                    req.params.id
+                ]
+            );
+
+            const product = mapProduct(
+                updated.rows[0]
+            );
+
+            const now = new Date();
+
+            await client.query(
+                `
+                INSERT INTO stock_activities (
+                    id,
+                    date,
+                    time,
+                    attendant,
+                    action,
+                    product_id,
+                    product,
+                    size,
+                    quantity,
+                    stock_after
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                `,
+                [
+                    genId('sa'),
+                    now.toISOString().slice(0, 10),
+                    now.toLocaleTimeString(),
+                    req.user.username,
+                    'STOCK ADDED',
+                    product.id,
+                    product.name,
+                    product.size,
+                    quantity,
+                    product.stock
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Stock',
+                action: 'Stock added',
+                details:
+                    `${product.name} ${product.size}: +${quantity} (now ${product.stock})`.trim()
+            });
+
+            res.json({ product });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            console.error(
+                'Failed to add stock:',
+                err
+            );
+
+            res.status(500).json({
+                error: 'Failed to add stock.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+app.delete(
+    '/api/products/:id',
+    auth,
+    requirePerm('stock'),
+    async (req, res) => {
+        try {
+            const result = await pool.query(
+                `
+                DELETE FROM products
+                WHERE id = $1
+                RETURNING *
+                `,
+                [req.params.id]
+            );
+
+            if (!result.rows.length) {
+                return res.status(404).json({
+                    error: 'Product not found.'
+                });
+            }
+
+            const product = mapProduct(
+                result.rows[0]
+            );
+
+            await appendAudit({
+                username: req.user.username,
+                role: req.user.role,
+                category: 'Stock',
+                action: 'Product deleted',
+                details:
+                    `${product.name} ${product.size}`.trim()
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error(
+                'Failed to delete product:',
+                err
+            );
+
+            res.status(500).json({
+                error: 'Failed to delete product.'
+            });
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// SALES HELPERS
+// ---------------------------------------------------------------------
+
+function mapSale(row, items, payments) {
+    return {
+        id: row.id,
+        date: row.date
+            ? new Date(row.date)
+                  .toISOString()
+                  .slice(0, 10)
+            : null,
+        time: row.time,
+        total: Number(row.total),
+        payment: row.payment,
+        attendant: row.attendant,
+        attendantId: row.attendant_id,
+        items: items.map(item => ({
+            productId: item.product_id,
+            name: item.name,
+            size: item.size,
+            price: Number(item.price),
+            buyingPrice: Number(
+                item.buying_price
+            ),
+            qty: Number(item.qty)
+        })),
+        createdAt: row.created_at,
+        paymentStatus: row.payment_status,
+        amountPaid: Number(row.amount_paid),
+        balance: Number(row.balance),
+        customerName: row.customer_name || '',
+        customerPhone: row.customer_phone || '',
+        dueDate: row.due_date || '',
+        payments: payments.map(payment => ({
+            date: payment.payment_date
+                ? new Date(payment.payment_date)
+                      .toISOString()
+                      .slice(0, 10)
+                : null,
+            time: payment.payment_date
+                ? new Date(
+                      payment.payment_date
+                  ).toLocaleTimeString()
+                : '',
+            amount: Number(payment.amount),
+            by: payment.paid_by || ''
+        }))
+    };
+}
+
+async function getAllSales() {
+    const salesResult = await pool.query(`
+        SELECT *
+        FROM sales
+        ORDER BY created_at DESC
+    `);
+
+    const itemsResult = await pool.query(`
+        SELECT *
+        FROM sale_items
+        ORDER BY id ASC
+    `);
+
+    const paymentsResult = await pool.query(`
+        SELECT *
+        FROM sale_payments
+        ORDER BY id ASC
+    `);
+
+    const itemsBySale = new Map();
+    const paymentsBySale = new Map();
+
+    for (const item of itemsResult.rows) {
+        if (!itemsBySale.has(item.sale_id)) {
+            itemsBySale.set(item.sale_id, []);
+        }
+
+        itemsBySale.get(item.sale_id).push(item);
+    }
+
+    for (const payment of paymentsResult.rows) {
+        if (!paymentsBySale.has(payment.sale_id)) {
+            paymentsBySale.set(
+                payment.sale_id,
+                []
+            );
+        }
+
+        paymentsBySale
+            .get(payment.sale_id)
+            .push(payment);
+    }
+
+    return salesResult.rows.map(sale =>
+        mapSale(
+            sale,
+            itemsBySale.get(sale.id) || [],
+            paymentsBySale.get(sale.id) || []
+        )
+    );
+}
+
+// ---------------------------------------------------------------------
+// SALES
+// ---------------------------------------------------------------------
+
+app.get(
+    '/api/sales',
+    auth,
+    requirePerm(
+        'sales',
+        'reports',
+        'profit',
+        'history'
+    ),
+    async (req, res) => {
+        try {
+            const sales = await getAllSales();
+
+            res.json({ sales });
+        } catch (err) {
+            console.error(
+                'Failed to load sales:',
+                err
+            );
+
+            res.status(500).json({
+                error: 'Failed to load sales.'
+            });
+        }
+    }
+);
+
+app.post(
+    '/api/sales',
+    auth,
+    requirePerm('sales'),
+    async (req, res) => {
+        const {
+            items,
+            payment,
+            paymentStatus,
+            amountPaid,
+            customerName,
+            customerPhone,
+            dueDate
+        } = req.body || {};
+
+        if (
+            !Array.isArray(items) ||
+            !items.length
+        ) {
+            return res.status(400).json({
+                error: 'Cart is empty.'
+            });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const saleItems = [];
+            let total = 0;
+
+            // Lock products during the entire sale transaction.
+            // This prevents two simultaneous sales from selling
+            // the same stock.
+            for (const item of items) {
+                const qty = Number(item.qty);
+
+                if (
+                    !item.productId ||
+                    !Number.isFinite(qty) ||
+                    qty <= 0
+                ) {
+                    throw Object.assign(
+                        new Error('BAD_ITEM'),
+                        { status: 400 }
+                    );
+                }
+
+                const productResult =
+                    await client.query(
+                        `
+                        SELECT *
+                        FROM products
+                        WHERE id = $1
+                        FOR UPDATE
+                        `,
+                        [item.productId]
+                    );
+
+                const product =
+                    productResult.rows[0];
+
+                if (!product) {
+                    throw Object.assign(
+                        new Error('BAD_ITEM'),
+                        { status: 400 }
+                    );
+                }
+
+                if (
+                    Number(product.stock) + 1e-9 <
+                    qty
+                ) {
+                    throw Object.assign(
+                        new Error(
+                            'Not enough stock for ' +
+                                product.name +
+                                '.'
+                        ),
+                        { status: 409 }
+                    );
+                }
+
+                saleItems.push({
+                    product,
+                    qty
+                });
+            }
+
+            for (const entry of saleItems) {
+                const product = entry.product;
+                const qty = entry.qty;
+
+                const newStock =
+                    Math.max(
+                        0,
+                        Number(product.stock) -
+                            qty
+                    );
+
+                await client.query(
+                    `
+                    UPDATE products
+                    SET stock = $1
+                    WHERE id = $2
+                    `,
+                    [
+                        newStock,
+                        product.id
+                    ]
+                );
+
+                total +=
+                    Number(product.price) *
+                    qty;
+            }
+
+            const requestedPending =
+                paymentStatus === 'pending';
+
+            let status = requestedPending
+                ? 'pending'
+                : 'paid';
+
+            let paidNow =
+                status === 'pending'
+                    ? Number(amountPaid)
+                    : total;
+
+            if (
+                !Number.isFinite(paidNow) ||
+                paidNow < 0
+            ) {
+                paidNow = 0;
+            }
+
+            if (paidNow > total) {
+                paidNow = total;
+            }
+
+            if (
+                paidNow + 1e-9 >= total
+            ) {
+                status = 'paid';
+            }
+
+            const now = new Date();
+
+            const saleId = genId('s');
+
+            const sale = {
+                id: saleId,
+                date: now
+                    .toISOString()
+                    .slice(0, 10),
+                time: now.toLocaleTimeString(),
+                total,
+                payment: payment || 'Cash',
+                attendant:
+                    req.user.username,
+                attendantId: req.user.id,
+                createdAt:
+                    now.toISOString(),
+                paymentStatus: status,
+                amountPaid: paidNow,
+                balance: Math.max(
+                    0,
+                    total - paidNow
+                ),
+                customerName:
+                    requestedPending
+                        ? String(
+                              customerName ||
+                                  ''
+                          ).trim()
+                        : '',
+                customerPhone:
+                    requestedPending
+                        ? String(
+                              customerPhone ||
+                                  ''
+                          ).trim()
+                        : '',
+                dueDate:
+                    requestedPending
+                        ? String(
+                              dueDate || ''
+                          ).trim()
+                        : ''
+            };
+
+            await client.query(
+                `
+                INSERT INTO sales (
+                    id,
+                    date,
+                    time,
+                    total,
+                    payment,
+                    attendant,
+                    attendant_id,
+                    created_at,
+                    payment_status,
+                    amount_paid,
+                    balance,
+                    customer_name,
+                    customer_phone,
+                    due_date
+                )
+                VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,
+                    $9,$10,$11,$12,$13,$14
+                )
+                `,
+                [
+                    sale.id,
+                    sale.date,
+                    sale.time,
+                    sale.total,
+                    sale.payment,
+                    sale.attendant,
+                    sale.attendantId,
+                    sale.createdAt,
+                    sale.paymentStatus,
+                    sale.amountPaid,
+                    sale.balance,
+                    sale.customerName,
+                    sale.customerPhone,
+                    sale.dueDate
+                ]
+            );
+
+            for (const entry of saleItems) {
+                const product = entry.product;
+                const qty = entry.qty;
+
+                await client.query(
+                    `
+                    INSERT INTO sale_items (
+                        sale_id,
+                        product_id,
+                        name,
+                        size,
+                        price,
+                        buying_price,
+                        qty
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    `,
+                    [
+                        sale.id,
+                        product.id,
+                        product.name,
+                        product.size,
+                        Number(product.price),
+                        Number(
+                            product.buying_price
+                        ),
+                        qty
+                    ]
+                );
+
+                await client.query(
+                    `
+                    INSERT INTO stock_activities (
+                        id,
+                        date,
+                        time,
+                        attendant,
+                        action,
+                        product_id,
+                        product,
+                        size,
+                        quantity,
+                        stock_after
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    `,
+                    [
+                        genId('sa'),
+                        sale.date,
+                        sale.time,
+                        req.user.username,
+                        'SALE',
+                        product.id,
+                        product.name,
+                        product.size,
+                        -qty,
+                        Math.max(
+                            0,
+                            Number(
+                                product.stock
+                            ) - qty
+                        )
+                    ]
+                );
+            }
+
+            if (paidNow > 0) {
+                await client.query(
+                    `
+                    INSERT INTO sale_payments (
+                        sale_id,
+                        amount,
+                        payment_date,
+                        paid_by
+                    )
+                    VALUES ($1,$2,$3,$4)
+                    `,
+                    [
+                        sale.id,
+                        paidNow,
+                        now.toISOString(),
+                        req.user.username
+                    ]
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const itemSummary =
+                saleItems
+                    .map(
+                        x =>
+                            `${x.product.name} x${x.qty}`
+                    )
+                    .join(', ');
+
+            const pendingNote =
+                sale.paymentStatus ===
+                'pending'
+                    ? ` — PENDING balance KES ${sale.balance.toFixed(
+                          2
+                      )}${
+                          sale.customerName
+                              ? ' (' +
+                                sale.customerName +
+                                ')'
+                              : ''
+                      }`
+                    : '';
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Sales',
+                action:
+                    sale.paymentStatus ===
+                    'pending'
+                        ? 'Sale completed (pending payment)'
+                        : 'Sale completed',
+                details:
+                    `KES ${sale.total.toFixed(
+                        2
+                    )} (${sale.payment}) — ${itemSummary}${pendingNote}`
+            });
+
+            res.status(201).json({
+                sale: {
+                    ...sale,
+                    items: saleItems.map(
+                        x => ({
+                            productId:
+                                x.product.id,
+                            name:
+                                x.product.name,
+                            size:
+                                x.product.size,
+                            price: Number(
+                                x.product.price
+                            ),
+                            buyingPrice:
+                                Number(
+                                    x.product
+                                        .buying_price
+                                ),
+                            qty: x.qty
+                        })
+                    ),
+                    payments:
+                        paidNow > 0
+                            ? [
+                                  {
+                                      date: sale.date,
+                                      time: sale.time,
+                                      amount:
+                                          paidNow,
+                                      by: req
+                                          .user
+                                          .username
+                                  }
+                              ]
+                            : []
+                }
+            });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            if (err.status === 400) {
+                return res.status(400).json({
+                    error:
+                        'Invalid item in cart.'
+                });
+            }
+
+            if (err.status === 409) {
+                return res.status(409).json({
+                    error: err.message
+                });
+            }
+
+            console.error(
+                'Failed to complete sale:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to complete sale.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// COLLECT PAYMENT
+// ---------------------------------------------------------------------
+
+app.put(
+    '/api/sales/:id/pay',
+    auth,
+    requirePerm('sales'),
+    async (req, res) => {
+        const amount = Number(
+            (req.body || {}).amount
+        );
+
+        if (
+            !Number.isFinite(amount) ||
+            amount <= 0
+        ) {
+            return res.status(400).json({
+                error:
+                    'Enter a payment amount greater than 0.'
+            });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const saleResult =
+                await client.query(
+                    `
+                    SELECT *
+                    FROM sales
+                    WHERE id = $1
+                    FOR UPDATE
+                    `,
+                    [req.params.id]
+                );
+
+            const sale = saleResult.rows[0];
+
+            if (!sale) {
+                await client.query('ROLLBACK');
+
+                return res.status(404).json({
+                    error: 'Sale not found.'
+                });
+            }
+
+            const currentBalance =
+                sale.balance != null
+                    ? Number(sale.balance)
+                    : Math.max(
+                          0,
+                          Number(sale.total) -
+                              Number(
+                                  sale.amount_paid ||
+                                      0
+                              )
+                      );
+
+            if (currentBalance <= 0.005) {
+                await client.query('ROLLBACK');
+
+                return res.status(400).json({
+                    error:
+                        'This sale is already fully paid.'
+                });
+            }
+
+            const applied = Math.min(
+                amount,
+                currentBalance
+            );
+
+            const newAmountPaid =
+                Number(sale.amount_paid || 0) +
+                applied;
+
+            const newBalance = Math.max(
+                0,
+                Number(sale.total) -
+                    newAmountPaid
+            );
+
+            const newStatus =
+                newBalance <= 0.005
+                    ? 'paid'
+                    : 'pending';
+
+            const now = new Date();
+
+            await client.query(
+                `
+                UPDATE sales
+                SET amount_paid = $1,
+                    balance = $2,
+                    payment_status = $3
+                WHERE id = $4
+                `,
+                [
+                    newAmountPaid,
+                    newBalance,
+                    newStatus,
+                    sale.id
+                ]
+            );
+
+            await client.query(
+                `
+                INSERT INTO sale_payments (
+                    sale_id,
+                    amount,
+                    payment_date,
+                    paid_by
+                )
+                VALUES ($1,$2,$3,$4)
+                `,
+                [
+                    sale.id,
+                    applied,
+                    now.toISOString(),
+                    req.user.username
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            const updatedSaleResult =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM sales
+                    WHERE id = $1
+                    `,
+                    [sale.id]
+                );
+
+            const itemsResult =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM sale_items
+                    WHERE sale_id = $1
+                    ORDER BY id ASC
+                    `,
+                    [sale.id]
+                );
+
+            const paymentsResult =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM sale_payments
+                    WHERE sale_id = $1
+                    ORDER BY id ASC
+                    `,
+                    [sale.id]
+                );
+
+            const result = mapSale(
+                updatedSaleResult.rows[0],
+                itemsResult.rows,
+                paymentsResult.rows
+            );
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Sales',
+                action:
+                    'Pending payment collected',
+                details:
+                    `KES ${amount.toFixed(
+                        2
+                    )} towards ${
+                        result.customerName ||
+                        'a credit sale'
+                    } from ${
+                        result.date
+                    } — balance now KES ${result.balance.toFixed(
+                        2
+                    )}`
+            });
+
+            res.json({
+                sale: result
+            });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            console.error(
+                'Failed to record payment:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to record payment.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// DELETE ONE SALE
+// ---------------------------------------------------------------------
+
+app.delete(
+    '/api/sales/:id',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const saleResult =
+                await client.query(
+                    `
+                    SELECT *
+                    FROM sales
+                    WHERE id = $1
+                    FOR UPDATE
+                    `,
+                    [req.params.id]
+                );
+
+            const sale = saleResult.rows[0];
+
+            if (!sale) {
+                await client.query('ROLLBACK');
+
+                return res.json({
+                    ok: true
+                });
+            }
+
+            const itemsResult =
+                await client.query(
+                    `
+                    SELECT *
+                    FROM sale_items
+                    WHERE sale_id = $1
+                    `,
+                    [sale.id]
+                );
+
+            for (const item of itemsResult.rows) {
+                const productResult =
+                    await client.query(
+                        `
+                        SELECT *
+                        FROM products
+                        WHERE id = $1
+                        FOR UPDATE
+                        `,
+                        [item.product_id]
+                    );
+
+                if (productResult.rows.length) {
+                    const product =
+                        productResult.rows[0];
+
+                    const newStock =
+                        Number(product.stock) +
+                        Number(item.qty);
+
+                    await client.query(
+                        `
+                        UPDATE products
+                        SET stock = $1
+                        WHERE id = $2
+                        `,
+                        [
+                            newStock,
+                            product.id
+                        ]
+                    );
+
+                    await client.query(
+                        `
+                        INSERT INTO stock_activities (
+                            id,
+                            date,
+                            time,
+                            attendant,
+                            action,
+                            product_id,
+                            product,
+                            size,
+                            quantity,
+                            stock_after
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                        `,
+                        [
+                            genId('sa'),
+                            new Date()
+                                .toISOString()
+                                .slice(
+                                    0,
+                                    10
+                                ),
+                            new Date().toLocaleTimeString(),
+                            req.user.username,
+                            'SALE DELETED - STOCK RESTORED',
+                            product.id,
+                            product.name,
+                            product.size,
+                            Number(item.qty),
+                            newStock
+                        ]
+                    );
+                }
+            }
+
+            await client.query(
+                `DELETE FROM sales WHERE id = $1`,
+                [sale.id]
+            );
+
+            await client.query('COMMIT');
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Sales',
+                action: 'Sale deleted',
+                details:
+                    `KES ${Number(
+                        sale.total
+                    ).toFixed(
+                        2
+                    )} sale from ${sale.date} ${sale.time} — stock restored`
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            console.error(
+                'Failed to delete sale:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to delete sale.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// CLEAR SALES
+// ---------------------------------------------------------------------
+
+app.delete(
+    '/api/sales',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const salesResult =
+                await client.query(`
+                    SELECT id
+                    FROM sales
+                    FOR UPDATE
+                `);
+
+            const itemsResult =
+                await client.query(`
+                    SELECT *
+                    FROM sale_items
+                `);
+
+            for (const item of itemsResult.rows) {
+                const productResult =
+                    await client.query(
+                        `
+                        SELECT *
+                        FROM products
+                        WHERE id = $1
+                        FOR UPDATE
+                        `,
+                        [item.product_id]
+                    );
+
+                if (productResult.rows.length) {
+                    const product =
+                        productResult.rows[0];
+
+                    const newStock =
+                        Number(product.stock) +
+                        Number(item.qty);
+
+                    await client.query(
+                        `
+                        UPDATE products
+                        SET stock = $1
+                        WHERE id = $2
+                        `,
+                        [
+                            newStock,
+                            product.id
+                        ]
+                    );
+                }
+            }
+
+            await client.query(
+                `DELETE FROM sales`
+            );
+
+            await client.query('COMMIT');
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Sales',
+                action:
+                    'Sales history cleared',
+                details:
+                    'All sales removed and their stock restored'
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            await client.query('ROLLBACK');
+
+            console.error(
+                'Failed to clear sales history:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to clear sales history.'
+            });
+        } finally {
+            client.release();
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// EXPENDITURES
+// ---------------------------------------------------------------------
+
+function mapExpenditure(row) {
+    return {
+        id: row.id,
+        nature: row.nature,
+        date: row.date
+            ? new Date(row.date)
+                  .toISOString()
+                  .slice(0, 10)
+            : null,
+        amount: Number(row.amount)
+    };
+}
+
+app.get(
+    '/api/expenditures',
+    auth,
+    requirePerm('expenditure'),
+    async (req, res) => {
+        try {
+            const result = await pool.query(`
+                SELECT *
+                FROM expenditures
+                ORDER BY date DESC
+            `);
+
+            res.json({
+                expenditures:
+                    result.rows.map(
+                        mapExpenditure
+                    )
+            });
+        } catch (err) {
+            console.error(
+                'Failed to load expenditures:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to load expenditures.'
+            });
+        }
+    }
+);
+
+app.post(
+    '/api/expenditures',
+    auth,
+    requirePerm('expenditure'),
+    async (req, res) => {
+        const {
+            nature,
+            date,
+            amount
+        } = req.body || {};
+
+        const amt = Number(amount);
+
+        if (
+            !nature ||
+            !date ||
+            !Number.isFinite(amt) ||
+            amt <= 0
+        ) {
+            return res.status(400).json({
+                error:
+                    'Enter nature, date and amount.'
+            });
+        }
+
+        const entry = {
+            id: genId('e'),
+            nature: String(nature).trim(),
+            date,
+            amount: amt
+        };
+
+        try {
+            await pool.query(
+                `
+                INSERT INTO expenditures (
+                    id,
+                    nature,
+                    date,
+                    amount
+                )
+                VALUES ($1,$2,$3,$4)
+                `,
+                [
+                    entry.id,
+                    entry.nature,
+                    entry.date,
+                    entry.amount
+                ]
+            );
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category:
+                    'Expenditure',
+                action:
+                    'Expenditure added',
+                details:
+                    `${entry.nature}: KES ${amt.toFixed(
+                        2
+                    )} (${date})`
+            });
+
+            res.status(201).json({
+                expenditure: entry
+            });
+        } catch (err) {
+            console.error(
+                'Failed to add expenditure:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to add expenditure.'
+            });
+        }
+    }
+);
+
+app.delete(
+    '/api/expenditures/:id',
+    auth,
+    requirePerm('expenditure'),
+    async (req, res) => {
+        try {
+            const result = await pool.query(
+                `
+                DELETE FROM expenditures
+                WHERE id = $1
+                RETURNING *
+                `,
+                [req.params.id]
+            );
+
+            const deleted =
+                result.rows[0] || null;
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category:
+                    'Expenditure',
+                action:
+                    'Expenditure deleted',
+                details: deleted
+                    ? `${deleted.nature}: KES ${Number(
+                          deleted.amount
+                      ).toFixed(
+                          2
+                      )} (${deleted.date})`
+                    : req.params.id
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error(
+                'Failed to delete expenditure:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to delete expenditure.'
+            });
+        }
+    }
+);
+
+app.delete(
+    '/api/expenditures',
+    auth,
+    requirePerm('expenditure'),
+    async (req, res) => {
+        try {
+            await pool.query(
+                `DELETE FROM expenditures`
+            );
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category:
+                    'Expenditure',
+                action:
+                    'All expenditures cleared',
+                details: ''
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error(
+                'Failed to clear expenditures:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to clear expenditures.'
+            });
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// SETTINGS
+// ---------------------------------------------------------------------
+
+app.get(
+    '/api/settings',
+    auth,
+    requirePerm('settings'),
+    async (req, res) => {
+        try {
+            const result = await pool.query(
+                `
+                SELECT *
+                FROM settings
+                WHERE id = 1
+                `
+            );
+
+            const row = result.rows[0];
+
+            res.json({
+                settings: {
+                    businessName:
+                        row?.business_name ||
+                        'U-CHOICE LIQUOR'
+                }
+            });
+        } catch (err) {
+            console.error(
+                'Failed to load settings:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to load settings.'
+            });
+        }
+    }
+);
+
+app.put(
+    '/api/settings',
+    auth,
+    requirePerm('settings'),
+    async (req, res) => {
+        const businessName =
+            (
+                (req.body || {})
+                    .businessName || ''
+            ).trim() ||
+            'U-CHOICE LIQUOR';
+
+        try {
+            await pool.query(
+                `
+                INSERT INTO settings (
+                    id,
+                    business_name
+                )
+                VALUES (1,$1)
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    business_name =
+                        EXCLUDED.business_name
+                `,
+                [businessName]
+            );
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Settings',
+                action:
+                    'Business settings updated',
+                details:
+                    `Business name set to "${businessName}"`
+            });
+
+            res.json({
+                settings: {
+                    businessName
+                }
+            });
+        } catch (err) {
+            console.error(
+                'Failed to save settings:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to save settings.'
+            });
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// AUDIT LOG
+// ---------------------------------------------------------------------
+
+app.get(
+    '/api/audit-log',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        try {
+            const result = await pool.query(`
+                SELECT *
+                FROM audit_logs
+                ORDER BY timestamp DESC
+                LIMIT 5000
+            `);
+
+            res.json({
+                entries: result.rows
+            });
+        } catch (err) {
+            console.error(
+                'Failed to load audit log:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to load audit log.'
+            });
+        }
+    }
+);
+
+app.post(
+    '/api/audit-log',
+    auth,
+    async (req, res) => {
+        const {
+            category,
+            action,
+            details
+        } = req.body || {};
+
+        if (!action) {
+            return res.status(400).json({
+                error: 'action is required'
+            });
+        }
+
+        try {
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: category
+                    ? String(category).slice(
+                          0,
+                          40
+                      )
+                    : 'Business',
+                action: String(action).slice(
+                    0,
+                    80
+                ),
+                details: details
+                    ? String(details).slice(
+                          0,
+                          500
+                      )
+                    : ''
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error(
+                'Failed to append audit entry:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to append audit entry.'
+            });
+        }
+    }
+);
+
+app.delete(
+    '/api/audit-log',
+    auth,
+    requireAdmin,
+    async (req, res) => {
+        try {
+            await pool.query(
+                `DELETE FROM audit_logs`
+            );
+
+            await appendAudit({
+                username:
+                    req.user.username,
+                role: req.user.role,
+                category: 'Audit',
+                action:
+                    'Audit log cleared',
+                details:
+                    'All prior entries were deleted'
+            });
+
+            res.json({ ok: true });
+        } catch (err) {
+            console.error(
+                'Failed to clear audit log:',
+                err
+            );
+
+            res.status(500).json({
+                error:
+                    'Failed to clear audit log.'
+            });
+        }
+    }
+);
+
+// ---------------------------------------------------------------------
+// HEALTH
+// ---------------------------------------------------------------------
+
+app.get('/api/health', async (req, res) => {
+    try {
+        await pool.query('SELECT 1');
+
+        res.json({
+            ok: true,
+            database: 'connected'
+        });
+    } catch (err) {
+        console.error(
+            'Database health check failed:',
+            err
+        );
+
+        res.status(503).json({
+            ok: false,
+            database: 'disconnected'
+        });
+    }
 });
 
 // ---------------------------------------------------------------------
-// Settings — requires settings access to read or write.
+// SERVER
 // ---------------------------------------------------------------------
-app.get('/api/settings', auth, requirePerm('settings'), (req, res) => {
-  const data = readJSON(DATA_FILE, defaultData());
-  res.json({ settings: data.settings || { businessName: 'U-CHOICE LIQUOR' } });
-});
-
-app.put('/api/settings', auth, requirePerm('settings'), async (req, res) => {
-  const businessName = ((req.body || {}).businessName || '').trim() || 'U-CHOICE LIQUOR';
-  try {
-    const settings = { businessName };
-    await mutateJSON(DATA_FILE, defaultData, (data) => { data.settings = settings; });
-    await appendAudit({ username: req.user.username, role: req.user.role, category: 'Settings', action: 'Business settings updated', details: `Business name set to "${businessName}"` });
-    res.json({ settings });
-  } catch (err) {
-    console.error('Failed to save settings:', err);
-    res.status(500).json({ error: 'Failed to save settings.' });
-  }
-});
-
-// ---------------------------------------------------------------------
-// Audit log endpoints
-// Reading and clearing the log is admin-only. Any authenticated user can
-// append a business-event entry (sale completed, stock added, etc.) — but
-// the actor identity is always taken from their verified session, never
-// from the request body, so entries can't be forged as someone else.
-// ---------------------------------------------------------------------
-app.get('/api/audit-log', auth, requireAdmin, (req, res) => {
-  res.json({ entries: loadAudit() });
-});
-
-app.post('/api/audit-log', auth, async (req, res) => {
-  const { category, action, details } = req.body || {};
-  if (!action) return res.status(400).json({ error: 'action is required' });
-  await appendAudit({
-    username: req.user.username,
-    role: req.user.role,
-    category: category ? String(category).slice(0, 40) : 'Business',
-    action: String(action).slice(0, 80),
-    details: details ? String(details).slice(0, 500) : ''
-  });
-  res.json({ ok: true });
-});
-
-app.delete('/api/audit-log', auth, requireAdmin, async (req, res) => {
-  await saveAudit([]);
-  await appendAudit({ username: req.user.username, role: req.user.role, category: 'Audit', action: 'Audit log cleared', details: 'All prior entries were deleted' });
-  res.json({ ok: true });
-});
-
-app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
-  console.log(`U-Choice Liquor POS server running on http://localhost:${PORT}`);
+    console.log(
+        `U-Choice Liquor POS server running on port ${PORT}`
+    );
 });
